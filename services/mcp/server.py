@@ -436,11 +436,44 @@ def daily_brief() -> str:
     )
 
 
+def _ensure_collection():
+    """Fresh installs have no collection; create it (plus payload indexes) so
+    the first store_memory works. Waits for Qdrant to come up. Idempotent."""
+    dim = int(os.environ.get("QDRANT_DIM", "1536"))
+    for _ in range(45):
+        try:
+            r = requests.get(f"{QDRANT_URL}/collections/{COLLECTION}",
+                             headers={"api-key": QDRANT_KEY}, timeout=5)
+            if r.status_code == 200:
+                return
+            if r.status_code == 404:
+                requests.put(f"{QDRANT_URL}/collections/{COLLECTION}",
+                             json={"vectors": {"size": dim, "distance": "Cosine"}},
+                             headers={"api-key": QDRANT_KEY}, timeout=20).raise_for_status()
+                for field, schema in (("user_id", "keyword"), ("source", "keyword"),
+                                      ("tags", "keyword"), ("os_status", "keyword"),
+                                      ("os_kind", "keyword"), ("created_at_ts", "float")):
+                    try:
+                        requests.put(f"{QDRANT_URL}/collections/{COLLECTION}/index?wait=true",
+                                     json={"field_name": field, "field_schema": schema},
+                                     headers={"api-key": QDRANT_KEY}, timeout=20)
+                    except Exception:
+                        pass
+                print(f"created collection '{COLLECTION}' ({dim}-dim cosine) + indexes", flush=True)
+                return
+        except Exception:
+            pass
+        import time
+        time.sleep(2)
+    print("warning: qdrant unreachable at boot; collection not ensured", file=sys.stderr)
+
+
 if __name__ == "__main__":
     secret = os.environ.get("CORTEX_MCP_PATH_SECRET", "").strip()
     if not secret or len(secret) < 24:
         print("CORTEX_MCP_PATH_SECRET missing or too short", file=sys.stderr)
         sys.exit(1)
+    _ensure_collection()
     # Railway's edge and private network are IPv6; bind dual-stack wildcard.
     mcp.settings.host = os.environ.get("MCP_BIND_HOST", "::")
     mcp.settings.port = int(os.environ.get("PORT", "8080"))
