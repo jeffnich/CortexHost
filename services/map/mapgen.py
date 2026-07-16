@@ -279,6 +279,15 @@ def build_html(norm, texts, sources, types, dates, tss, labels, cluster_names, o
     # verdict from classify_untagged(); fall back to a source heuristic if absent.
     if personal is None:
         personal = [sources[i] in PERSONAL_SOURCES for i in range(len(texts))]
+    # deterministic belt over the LLM verdicts: anything matching
+    # CORTEX_PRIVATE_REGEX renders personal, including future captures
+    priv_re = os.getenv("CORTEX_PRIVATE_REGEX", "").strip()
+    if priv_re:
+        try:
+            rx = re.compile(priv_re, re.I)
+            personal = [bool(personal[i]) or bool(rx.search(texts[i])) for i in range(len(texts))]
+        except re.error as e:
+            print(f"  bad CORTEX_PRIVATE_REGEX ignored: {e}", flush=True)
     pts = []
     for i in range(len(texts)):
         pers = 1 if personal[i] else 0
