@@ -1,0 +1,4 @@
+openai>=1.40
+requests>=2.31
+python-dotenv>=1.0
+mcp>=1.9

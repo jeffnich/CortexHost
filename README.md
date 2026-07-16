@@ -1,4 +1,4 @@
-# Cortex
+# CortexHost
 
 A self-hosted second brain: every surface you think on feeds one private
 memory substrate, and everything downstream — recall inside your AI chats, a
@@ -41,15 +41,28 @@ them back through MCP to whatever AI you already use.
   redacted view on its own secret URL with a styled password gate to the
   full map.
 
-## Quickstart
+## Install with an AI agent (recommended)
+
+This repo is agent-ready: [AGENTS.md](AGENTS.md) is a full runbook (steps,
+verification, failure modes) that Claude Code, Cursor, and most coding agents
+read automatically. So the easiest install is:
 
 ```bash
-git clone <this repo> && cd cortex
-cp .env.example .env
-# fill in: OPENAI_API_KEY, QDRANT_API_KEY, the four path secrets
-# (python3 -c "import secrets; print(secrets.token_urlsafe(32))"),
-# and your CORTEX_USER_* identity lines
-docker compose up -d --build
+git clone https://github.com/jeffnich/CortexHost && cd CortexHost
+claude   # or open the folder in Cursor
+```
+
+and say: **"Set up Cortex for me — follow AGENTS.md."** The agent runs
+`./setup.sh`, verifies every service, connects itself to your new memory
+server over MCP, and walks you through importing your ChatGPT history. You
+supply exactly one thing: your OpenAI API key.
+
+## Quickstart (manual)
+
+```bash
+git clone https://github.com/jeffnich/CortexHost && cd CortexHost
+./setup.sh    # scaffolds .env, generates secrets, boots the stack, verifies
+./verify.sh   # re-check health any time
 ```
 
 Then:
