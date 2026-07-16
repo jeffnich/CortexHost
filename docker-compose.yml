@@ -1,0 +1,77 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+
+  mcp:
+    build: ./services/mcp
+    restart: unless-stopped
+    depends_on: [qdrant]
+    environment:
+      - PORT=8080
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_COLLECTION=memories
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CORTEX_MCP_PATH_SECRET=${CORTEX_MCP_PATH_SECRET}
+      - CORTEX_TENANT_ID=${CORTEX_TENANT_ID}
+      - CORTEX_USER_ID=${CORTEX_USER_ID}
+      - CORTEX_TZ=${CORTEX_TZ}
+    ports:
+      - "8300:8080"
+
+  brief:
+    build: ./services/brief
+    restart: unless-stopped
+    depends_on: [qdrant]
+    environment:
+      - PORT=8080
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_COLLECTION=memories
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CORTEX_TENANT_ID=${CORTEX_TENANT_ID}
+      - CORTEX_USER_ID=${CORTEX_USER_ID}
+      - CORTEX_USER_NAME=${CORTEX_USER_NAME}
+      - CORTEX_USER_CONTEXT=${CORTEX_USER_CONTEXT}
+      - CORTEX_USER_GOALS=${CORTEX_USER_GOALS}
+      - BRIEF_PATH_SECRET=${BRIEF_PATH_SECRET}
+      - BRIEF_HOUR_UTC=${BRIEF_HOUR_UTC}
+      - BRIEF_MODEL=${BRIEF_MODEL}
+      - GMAIL_USER=${GMAIL_USER}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+      - BRIEF_EMAIL_TO=${BRIEF_EMAIL_TO}
+      - BRIEF_URL=${BRIEF_URL}
+    ports:
+      - "8301:8080"
+
+  map:
+    build: ./services/map
+    restart: unless-stopped
+    depends_on: [qdrant]
+    environment:
+      - PORT=8080
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - QDRANT_COLLECTION=memories
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CORTEX_TENANT_ID=${CORTEX_TENANT_ID}
+      - CORTEX_USER_ID=${CORTEX_USER_ID}
+      - CORTEX_USER_NAME=${CORTEX_USER_NAME}
+      - CORTEX_EXCLUDE=${CORTEX_EXCLUDE}
+      - MAP_PATH_SECRET=${MAP_PATH_SECRET}
+      - DEMO_PATH_SECRET=${DEMO_PATH_SECRET}
+      - MAP_PASSWORD=${MAP_PASSWORD}
+      - MAP_TOPICS=${MAP_TOPICS}
+      - MAP_REFRESH_HOURS=${MAP_REFRESH_HOURS}
+    ports:
+      - "8302:8080"
+
+volumes:
+  qdrant_data:

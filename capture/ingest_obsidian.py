@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""
+Backfill personal-layer Obsidian notes into the Cortex brain.
+
+Two-zone: only the folders you list in OBSIDIAN_INCLUDE cross; everything else
+(work folders, meetings) stays siloed and is never read. Each note is distilled
+to personal-layer sparks and
+pushed via the cloud MCP with deterministic dedupe keys (idempotent re-runs).
+
+  python3 capture/ingest_obsidian.py --dry-run [--limit N]
+  python3 capture/ingest_obsidian.py --execute [--limit N]
+"""
+
+import argparse
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+
+import cortex_ingest as ci
+
+VAULT = Path(os.getenv("OBSIDIAN_VAULT", str(Path.home() / "Documents" / "Obsidian Vault")))
+# Personal-layer folders only (comma-separated, relative to the vault). Work
+# folders never cross: two-zone by explicit choice, not by default.
+INCLUDE = [s.strip() for s in os.getenv("OBSIDIAN_INCLUDE", "").split(",") if s.strip()]
+if not INCLUDE:
+    raise SystemExit("Set OBSIDIAN_INCLUDE to the personal folders to ingest (two-zone by choice).")
+WORKERS = 6
+STATE_FILE = Path(__file__).resolve().parent.parent / ".cortex_obsidian_state.json"
+
+
+def iter_notes():
+    for inc in INCLUDE:
+        base = VAULT / inc
+        if not base.exists():
+            continue
+        for f in sorted(base.rglob("*.md")):
+            yield inc, f
+
+
+def distill_one(item):
+    inc, f = item
+    rel = str(f.relative_to(VAULT))
+    try:
+        text = f.read_text(errors="ignore").strip()
+    except Exception:
+        return inc, rel, f, []
+    if len(text) < 40:
+        return inc, rel, f, []
+    sparks = ci.distill(text, kind="personal note / journal entry", context=f"Note: {rel}")
+    return inc, rel, f, sparks
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--fresh", action="store_true", help="ignore state; reprocess everything")
+    args = ap.parse_args()
+
+    state = {} if args.fresh or not STATE_FILE.exists() else json.loads(STATE_FILE.read_text())
+    files = list(iter_notes())
+    # incremental: skip notes whose mtime is unchanged since last successful run
+    if not args.fresh:
+        fresh_files = []
+        for inc, f in files:
+            rel = str(f.relative_to(VAULT))
+            if state.get(rel) != f.stat().st_mtime:
+                fresh_files.append((inc, f))
+        skipped = len(files) - len(fresh_files)
+        files = fresh_files
+        if skipped:
+            print(f"incremental: skipping {skipped} unchanged notes", flush=True)
+    if args.limit:
+        files = files[: args.limit]
+    print(f"obsidian notes in scope: {len(files)} (folders: {', '.join(INCLUDE)})", flush=True)
+
+    records = []
+    processed = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for inc, rel, f, sparks in pool.map(distill_one, files):
+            done += 1
+            st = f.stat().st_mtime
+            processed[rel] = st
+            mtime = datetime.fromtimestamp(st, timezone.utc).isoformat()
+            for j, sp in enumerate(sparks):
+                records.append({
+                    "text": sp["text"],
+                    "type": sp["type"],
+                    "when": mtime,
+                    "dedupe_key": f"obsidian:{rel}#{j}",
+                    "tags": ["obsidian", inc.split("/")[0], sp["type"]],
+                })
+            print(f"  [{done}/{len(files)}] {rel} -> {len(sparks)} sparks", flush=True)
+
+    print(f"total sparks distilled: {len(records)}", flush=True)
+    if args.dry_run or not args.execute:
+        for r in records[:10]:
+            print(f"   [{r['type']}] {r['text'][:110]}", flush=True)
+        return
+
+    res = ci.push(records, source="obsidian", default_tags=["obsidian"])
+    print(f"RESULT: {res}", flush=True)
+    # record state only on a clean push so failures get retried next run
+    if res.get("errors", 0) == 0:
+        state.update(processed)
+        STATE_FILE.write_text(json.dumps(state))
+        print(f"state updated: {len(state)} notes tracked", flush=True)
+
+
+if __name__ == "__main__":
+    main()

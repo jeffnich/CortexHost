@@ -1,0 +1,18 @@
+# secrets & local config
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+
+# capture state (machine-local, resumable)
+.cortex_*_state.json
+
+# data that must never be committed
+uploads/
+viz/
+logs/
+*.log

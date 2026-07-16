@@ -1,0 +1,59 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Cortex · how it works</title>
+<style>
+ :root{--bg:#07070d;--accent:#ff8a5c;--accent2:#7c5cff;--cyan:#5cc8ff;--txt:#eef;--mut:#8a8aa2;--bord:#23233a;--mono:ui-monospace,'SF Mono',Menlo,monospace}
+ *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 800px at 50% -10%,#15102a 0%,var(--bg) 60%);color:var(--txt);font:15px/1.7 -apple-system,system-ui,sans-serif;padding:40px 20px 80px}
+ .wrap{max-width:820px;margin:0 auto}
+ a.back{color:var(--cyan);text-decoration:none;font-size:13px}
+ h1{font-size:30px;margin:18px 0 6px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+ .sub{color:var(--mut);margin:0 0 34px}
+ h2{font-size:19px;margin:38px 0 10px;color:var(--accent)}
+ p{color:#cfcfe2;margin:10px 0}
+ .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+ .chip{border:1px solid var(--bord);border-radius:999px;padding:6px 14px;font-size:13px;background:rgba(12,12,22,.55)}
+ .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
+ .card{border:1px solid var(--bord);border-radius:14px;padding:16px;background:rgba(12,12,22,.55)}
+ .card b{color:var(--txt)} .card p{font-size:13.5px;color:var(--mut);margin:6px 0 0}
+ code,pre{font-family:var(--mono);font-size:12.5px}
+ pre{border:1px solid var(--bord);border-radius:12px;padding:14px;background:#0b0b14;overflow-x:auto;color:#b8f0c9}
+</style></head><body><div class="wrap">
+ <a class="back" href="demo.html">&larr; back to the map</a>
+ <h1>Cortex</h1>
+ <p class="sub">A self-hosted second brain. Every point on the map is one memory.</p>
+
+ <h2>The loop</h2>
+ <div class="chips">
+  <div class="chip">Capture</div><div class="chip">Condense</div><div class="chip">Store</div>
+  <div class="chip">Reflect</div><div class="chip">Forecast</div><div class="chip">Act</div>
+ </div>
+ <p>Everything the owner thinks on — AI chats, coding sessions, notes — flows through an LLM
+ distiller that keeps only the durable layer: decisions, frameworks, facts, preferences,
+ lessons. Each becomes a one-or-two-sentence <b>spark</b> with a dedupe key, embedded into a
+ private vector store. Everything you see here reads from that substrate.</p>
+
+ <h2>What's running</h2>
+ <div class="cards">
+  <div class="card"><b>Memory substrate</b><p>Qdrant, one collection, 1536-dim cosine embeddings, content-hash dedupe + near-duplicate guard.</p></div>
+  <div class="card"><b>MCP server</b><p>search / store / recall / todos, served over streamable HTTP behind a capability URL — plugged straight into the owner's AI chats.</p></div>
+  <div class="card"><b>Daily brief + foresight</b><p>A morning delta report, and weekly self-scored forecasts of which threads go dark next.</p></div>
+  <div class="card"><b>This map</b><p>UMAP projects every memory to 2D; KMeans finds the topics; a canvas renders the constellation.</p></div>
+ </div>
+
+ <h2>Why parts are grayed out</h2>
+ <p>This is the <b>shareable demo</b>. A classifier judges every memory personal-vs-public
+ (erring toward private). Personal memories render as gray dots with their text stripped
+ from the page server-side — not hidden with CSS. The full, unredacted map lives behind a
+ separate secret URL and a passphrase.</p>
+
+ <h2>What a memory looks like</h2>
+ <pre>{
+  "text": "Chose boring technology for the sync service; novelty budget
+           is spent on the memory layer.",
+  "type": "decision", "source": "claude-code",
+  "tags": ["architecture"], "created_at": "2026-05-11T21:04:00Z"
+}</pre>
+
+ <h2>Run your own</h2>
+ <p>Cortex is open source — a docker-compose away: Qdrant + three small Python services,
+ plus capture scripts for ChatGPT exports, Claude Code sessions, and Obsidian.</p>
+</div></body></html>
