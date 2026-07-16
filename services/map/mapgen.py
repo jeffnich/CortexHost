@@ -140,7 +140,7 @@ CLASSIFY_SYS = (
     "show colleagues and strangers. For each numbered memory return \"P\" (personal) "
     "or \"U\" (usable/public).\n"
     "PERSONAL = health, mental health, medication, therapy, diagnoses, biometrics; "
-    "relationships, family, friends' private lives; personal finances; private feelings "
+    "relationships, family, friends' private lives; personal finances, investments, trading or collectibles portfolios (positions, prices, valuations, buy/sell plans); private feelings "
     "or venting; employer-internal/confidential specifics tied to real people.\n"
     "USABLE = product/design thinking, frameworks, methodology, technical notes, code, "
     "architecture, tooling, writing/book ideas, generic facts and how-to knowledge.\n"
@@ -149,7 +149,11 @@ CLASSIFY_SYS = (
 )
 CLASSIFY_SYS = CLASSIFY_SYS.replace("__CORTEX_USER__", USER_NAME)
 if PRIVATE_EXTRA:
-    CLASSIFY_SYS += "\nAlso treat as PERSONAL: " + PRIVATE_EXTRA
+    # inject into the definition body, not after the format spec (models
+    # underweight trailing addenda)
+    CLASSIFY_SYS = CLASSIFY_SYS.replace(
+        "When unsure, choose P.",
+        "ALSO PERSONAL for this user: " + PRIVATE_EXTRA + "\nWhen unsure, choose P.")
 
 
 def _llm_personal(client, batch):
