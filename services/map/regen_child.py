@@ -24,14 +24,14 @@ DEMO_OUT = "/tmp/demo.html"
 
 def main():
     retire = os.environ.get("RETIRE_SOURCES", "").strip()
-    if retire:
+    if retire and retire.lower() not in ("0", "false", "off"):
         srcs = [s.strip() for s in retire.split(",") if s.strip()]
         try:
             n = mapgen.retire_sources(srcs, log=lambda m: print(m, flush=True))
             print(f"retire: done (~{n} points removed for {srcs})", flush=True)
         except Exception as e:
             print(f"retire error: {type(e).__name__}: {e}", flush=True)
-    if os.environ.get("RECLASSIFY", "").strip():
+    if os.environ.get("RECLASSIFY", "").strip().lower() not in ("", "0", "false", "off"):
         # one-shot: wipe cached verdicts so the classifier reruns against the
         # CURRENT CORTEX_EXCLUDE (set RECLASSIFY=1, deploy, then unset)
         import requests
