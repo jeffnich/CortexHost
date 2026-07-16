@@ -22,7 +22,14 @@ probe() { # name url expect_warming_ok
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "api-key: $QKEY" "http://localhost:$QP/collections" 2>/dev/null)
 if [ "$code" = "200" ]; then echo "PASS  qdrant ($code)"; else echo "FAIL  qdrant (HTTP ${code:-none})"; fail=1; fi
 
-probe "mcp     " "http://localhost:$MP/$MCPS/mcp"
+# MCP is a protocol endpoint: 406/400 on a browser-style GET means "alive,
+# speak MCP to me". Only 000/404/5xx are failures (404 = wrong secret).
+mcode=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://localhost:$MP/$MCPS/mcp" 2>/dev/null)
+case "$mcode" in
+  2*|400|405|406) echo "PASS  mcp      ($mcode - MCP endpoint alive)";;
+  404) echo "FAIL  mcp      (404 - secret path mismatch)"; fail=1;;
+  *) echo "FAIL  mcp      (HTTP ${mcode:-none})"; fail=1;;
+esac
 probe "brief   " "http://localhost:$BP/$BRS/brief.html" yes
 probe "map     " "http://localhost:$MAPP/$MAPS/map.html" yes
 probe "demo    " "http://localhost:$MAPP/$DEMOS/demo.html" yes

@@ -57,6 +57,8 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
 | map stays "warming" forever with data present | Check `docker compose logs map` for `regen error`; usually a bad `OPENAI_API_KEY` (cluster labeling) or empty corpus. |
 | capture scripts: `CORTEX_MCP_URL` errors | Set it in `.env` to `http://localhost:8300/<CORTEX_MCP_PATH_SECRET>/mcp`. |
 | embeddings errors everywhere | Invalid/missing `OPENAI_API_KEY`, or no billing on the OpenAI account. |
+| qdrant crash-loops: `Failed to load local shard` for a collection you never made | A pre-existing Docker volume from an older project shares the compose project name. Set `COMPOSE_PROJECT_NAME=<something-unique>` in `.env` and re-run `./setup.sh`. |
+| curl to the MCP URL returns 406/400 | That's healthy — MCP is a protocol endpoint, not a webpage. Connect a real MCP client. |
 
 ## Security invariants (do not weaken)
 

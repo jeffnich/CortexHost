@@ -46,7 +46,8 @@ MPORT=$(grep '^MCP_PORT=' .env | cut -d= -f2); MPORT=${MPORT:-8300}
 MAPPORT=$(grep '^MAP_PORT=' .env | cut -d= -f2); MAPPORT=${MAPPORT:-8302}
 printf "waiting for the MCP server"
 for i in $(seq 1 45); do
-  if curl -sf -o /dev/null "http://localhost:$MPORT/$SECRET/mcp"; then echo " - up."; break; fi
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://localhost:$MPORT/$SECRET/mcp" 2>/dev/null)
+  case "$code" in 2*|4*) echo " - up (HTTP $code)."; break;; esac
   printf "."; sleep 2
 done
 
