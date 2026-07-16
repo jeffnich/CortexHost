@@ -10,6 +10,8 @@ frameworks, facts, preferences, lessons) from every source, condenses it into
 one-sentence "sparks," embeds them into a vector store you own, and serves
 them back through MCP to whatever AI you already use.
 
+![The demo view of a real Cortex: 17,478 memories, 16 sources, 50 topics](docs/assets/demo-map.png)
+
 ```
  capture            condense              store            reflect
  ─────────          ─────────            ─────────         ─────────
@@ -40,6 +42,8 @@ them back through MCP to whatever AI you already use.
   personal-vs-public, grays and strips the personal ones, and serves the
   redacted view on its own secret URL with a styled password gate to the
   full map.
+
+  <img src="docs/assets/login.png" width="420" alt="The passphrase gate between the shareable demo and the full map">
 
 ## Install with an AI agent (recommended)
 
@@ -114,6 +118,29 @@ See [docs/capture-setup.md](docs/capture-setup.md) for ongoing auto-capture
   regenerates in a child process so the always-on server stays ~40MB.
 - Runs anywhere Docker runs. On Railway (what the original deployment uses),
   point the services at a private-network Qdrant and keep the same env vars.
+
+## What it costs
+
+- **Self-hosted**: the stack itself is free (Docker on your machine). A small
+  cloud box or Railway-style deploy runs ~$5-10/month.
+- **OpenAI usage**: embeddings are fractions of a cent per thousand memories;
+  the daily brief + weekly foresight cost pennies a day on `gpt-5-mini`. The
+  one real line item is the one-time distill of a big ChatGPT export — a few
+  dollars for hundreds of conversations. Set `BRIEF_MODEL`/`BACKFILL_MODEL`
+  to trade quality vs cost.
+
+## Updating, backing up, uninstalling
+
+```bash
+git pull && docker compose up -d --build      # update
+docker compose down                            # stop (data persists)
+docker compose down -v                         # UNINSTALL - deletes your memories
+```
+
+Your brain lives in the `qdrant_data` Docker volume. Back it up cold with
+`docker run --rm -v <project>_qdrant_data:/data -v "$PWD":/b alpine tar czf
+/b/cortex-backup.tgz /data` (find `<project>` via `docker volume ls`), or use
+Qdrant's snapshot API while running.
 
 ## Lineage & roadmap
 

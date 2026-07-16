@@ -25,7 +25,7 @@ services:
       - CORTEX_USER_ID=${CORTEX_USER_ID}
       - CORTEX_TZ=${CORTEX_TZ}
     ports:
-      - "${MCP_PORT:-8300}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${MCP_PORT:-8300}:8080"
 
   brief:
     build: ./services/brief
@@ -50,7 +50,7 @@ services:
       - BRIEF_EMAIL_TO=${BRIEF_EMAIL_TO}
       - BRIEF_URL=${BRIEF_URL}
     ports:
-      - "${BRIEF_PORT:-8301}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${BRIEF_PORT:-8301}:8080"
 
   map:
     build: ./services/map
@@ -72,7 +72,7 @@ services:
       - MAP_TOPICS=${MAP_TOPICS}
       - MAP_REFRESH_HOURS=${MAP_REFRESH_HOURS}
     ports:
-      - "${MAP_PORT:-8302}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${MAP_PORT:-8302}:8080"
 
 volumes:
   qdrant_data:

@@ -180,6 +180,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
             else:
+                time.sleep(2)  # blunt brute-force damper on the passphrase gate
                 self._send(login_page("That passphrase didn't match. Try again."), 401)
         else:
             self.send_response(404)
