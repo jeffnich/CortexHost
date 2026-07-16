@@ -51,7 +51,7 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
 
 | Symptom | Cause / fix |
 |---|---|
-| `docker compose` port conflict on 6333/8300-8302 | Another stack is using the port; edit the left side of the port mapping in `docker-compose.yml`. |
+| `docker compose` port conflict on 6333/8300-8302 | Set `QDRANT_PORT` / `MCP_PORT` / `BRIEF_PORT` / `MAP_PORT` in `.env` to free ports and re-run `./setup.sh`. |
 | `ensurepip` fails creating a venv | Python 3.14 quirk on some Macs; use `python3.12 -m venv`. |
 | brief/map return 503 | Normal while warming (brief ~1 min; map needs data + first UMAP). Re-check after import. |
 | map stays "warming" forever with data present | Check `docker compose logs map` for `regen error`; usually a bad `OPENAI_API_KEY` (cluster labeling) or empty corpus. |

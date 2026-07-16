@@ -42,9 +42,11 @@ echo "booting the stack (first build takes a few minutes)..."
 docker compose up -d --build
 
 SECRET=$(grep '^CORTEX_MCP_PATH_SECRET=' .env | cut -d= -f2)
+MPORT=$(grep '^MCP_PORT=' .env | cut -d= -f2); MPORT=${MPORT:-8300}
+MAPPORT=$(grep '^MAP_PORT=' .env | cut -d= -f2); MAPPORT=${MAPPORT:-8302}
 printf "waiting for the MCP server"
 for i in $(seq 1 45); do
-  if curl -sf -o /dev/null "http://localhost:8300/$SECRET/mcp"; then echo " - up."; break; fi
+  if curl -sf -o /dev/null "http://localhost:$MPORT/$SECRET/mcp"; then echo " - up."; break; fi
   printf "."; sleep 2
 done
 
@@ -55,16 +57,16 @@ cat <<EOF
 Connect your AI client to the memory server:
 
   Claude Code:
-    claude mcp add cortex --transport http "http://localhost:8300/$SECRET/mcp"
+    claude mcp add cortex --transport http "http://localhost:$MPORT/$SECRET/mcp"
 
   Cursor (.cursor/mcp.json in any project):
-    {"mcpServers": {"cortex": {"url": "http://localhost:8300/$SECRET/mcp"}}}
+    {"mcpServers": {"cortex": {"url": "http://localhost:$MPORT/$SECRET/mcp"}}}
 
 Then import your history (makes it feel alive on day one):
   1. ChatGPT: Settings -> Data controls -> Export -> put conversations.json in uploads/
   2. pip install -r capture/requirements.txt
   3. python3 capture/distill_chatgpt_export.py --execute
 
-The map at http://localhost:8302/<MAP_PATH_SECRET>/map.html shows "warming up"
+The map at http://localhost:$MAPPORT/<MAP_PATH_SECRET>/map.html shows "warming up"
 until memories exist and the first projection runs (a few minutes after import).
 EOF

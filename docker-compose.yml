@@ -7,7 +7,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
-      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
 
   mcp:
     build: ./services/mcp
@@ -24,7 +24,7 @@ services:
       - CORTEX_USER_ID=${CORTEX_USER_ID}
       - CORTEX_TZ=${CORTEX_TZ}
     ports:
-      - "8300:8080"
+      - "${MCP_PORT:-8300}:8080"
 
   brief:
     build: ./services/brief
@@ -49,7 +49,7 @@ services:
       - BRIEF_EMAIL_TO=${BRIEF_EMAIL_TO}
       - BRIEF_URL=${BRIEF_URL}
     ports:
-      - "8301:8080"
+      - "${BRIEF_PORT:-8301}:8080"
 
   map:
     build: ./services/map
@@ -71,7 +71,7 @@ services:
       - MAP_TOPICS=${MAP_TOPICS}
       - MAP_REFRESH_HOURS=${MAP_REFRESH_HOURS}
     ports:
-      - "8302:8080"
+      - "${MAP_PORT:-8302}:8080"
 
 volumes:
   qdrant_data:

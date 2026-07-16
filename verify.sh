@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 [ -f .env ] || { echo "FAIL: no .env (run ./setup.sh)"; exit 1; }
 get() { grep "^$1=" .env | cut -d= -f2-; }
 QKEY=$(get QDRANT_API_KEY); MCPS=$(get CORTEX_MCP_PATH_SECRET)
+QP=$(get QDRANT_PORT); QP=${QP:-6333}; MP=$(get MCP_PORT); MP=${MP:-8300}
+BP=$(get BRIEF_PORT); BP=${BP:-8301}; MAPP=$(get MAP_PORT); MAPP=${MAPP:-8302}
 BRS=$(get BRIEF_PATH_SECRET); MAPS=$(get MAP_PATH_SECRET); DEMOS=$(get DEMO_PATH_SECRET)
 fail=0
 
@@ -17,12 +19,12 @@ probe() { # name url expect_warming_ok
   else echo "FAIL  $name (HTTP ${code:-none})"; fail=1; fi
 }
 
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "api-key: $QKEY" "http://localhost:6333/collections" 2>/dev/null)
+code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H "api-key: $QKEY" "http://localhost:$QP/collections" 2>/dev/null)
 if [ "$code" = "200" ]; then echo "PASS  qdrant ($code)"; else echo "FAIL  qdrant (HTTP ${code:-none})"; fail=1; fi
 
-probe "mcp     " "http://localhost:8300/$MCPS/mcp"
-probe "brief   " "http://localhost:8301/$BRS/brief.html" yes
-probe "map     " "http://localhost:8302/$MAPS/map.html" yes
-probe "demo    " "http://localhost:8302/$DEMOS/demo.html" yes
+probe "mcp     " "http://localhost:$MP/$MCPS/mcp"
+probe "brief   " "http://localhost:$BP/$BRS/brief.html" yes
+probe "map     " "http://localhost:$MAPP/$MAPS/map.html" yes
+probe "demo    " "http://localhost:$MAPP/$DEMOS/demo.html" yes
 
 exit $fail
