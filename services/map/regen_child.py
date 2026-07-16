@@ -31,6 +31,15 @@ def main():
             print(f"retire: done (~{n} points removed for {srcs})", flush=True)
         except Exception as e:
             print(f"retire error: {type(e).__name__}: {e}", flush=True)
+    if os.environ.get("RECLASSIFY", "").strip():
+        # one-shot: wipe cached verdicts so the classifier reruns against the
+        # CURRENT CORTEX_EXCLUDE (set RECLASSIFY=1, deploy, then unset)
+        import requests
+        requests.post(f"{mapgen.URL}/collections/{mapgen.COLLECTION}/points/payload/delete?wait=true",
+                      json={"keys": ["demo_personal"],
+                            "filter": {"must": [{"key": "user_id", "match": {"value": mapgen.SCOPED_USER}}]}},
+                      headers={"api-key": mapgen.KEY}, timeout=300).raise_for_status()
+        print("reclassify: cleared cached demo_personal verdicts", flush=True)
     if os.environ.get("OPENAI_API_KEY"):
         try:
             mapgen.classify_untagged(log=lambda m: print(m, flush=True))
