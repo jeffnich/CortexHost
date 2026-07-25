@@ -48,7 +48,11 @@ def distill_one(item):
         return inc, rel, f, []
     if len(text) < 40:
         return inc, rel, f, []
-    sparks = ci.distill(text, kind="personal note / journal entry", context=f"Note: {rel}")
+    try:
+        sparks = ci.distill(text, kind="personal note / journal entry", context=f"Note: {rel}", strict=True)
+    except Exception as e:
+        print(f"  distill FAILED (will retry next run): {rel}: {type(e).__name__}", flush=True)
+        return inc, rel, f, None
     return inc, rel, f, sparks
 
 
@@ -83,6 +87,8 @@ def main():
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for inc, rel, f, sparks in pool.map(distill_one, files):
             done += 1
+            if sparks is None:  # distill failed; leave out of state so it retries
+                continue
             st = f.stat().st_mtime
             processed[rel] = st
             mtime = datetime.fromtimestamp(st, timezone.utc).isoformat()

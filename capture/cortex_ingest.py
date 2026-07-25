@@ -65,9 +65,13 @@ def _chunks(text: str):
     return out
 
 
-def distill(text: str, kind: str = "note", context: str = "", system: str | None = None) -> list[dict]:
+def distill(text: str, kind: str = "note", context: str = "", system: str | None = None,
+            strict: bool = False) -> list[dict]:
     """Two-zone distill of free-form text -> [{text, type}]. Pass `system` to
-    override the default distiller prompt (e.g. iMessage keeps personal names)."""
+    override the default distiller prompt (e.g. iMessage keeps personal names).
+    strict=True re-raises chunk failures (after one retry) so callers can
+    distinguish "nothing durable" from "API was down" and retry later."""
+    import time as _time
     sys = system or DISTILLER_SYSTEM.format(kind=kind)
     sparks = []
     for chunk in _chunks(text):
@@ -87,6 +91,24 @@ def distill(text: str, kind: str = "note", context: str = "", system: str | None
                     sparks.append({"text": t, "type": s.get("type", "note")})
         except Exception as e:
             print(f"  distill error: {type(e).__name__}: {e}", flush=True)
+            if strict:
+                _time.sleep(15)
+                try:
+                    resp = _openai.chat.completions.create(
+                        model=DISTILL_MODEL,
+                        messages=[
+                            {"role": "system", "content": sys},
+                            {"role": "user", "content": (context + "\n\n" + chunk).strip()},
+                        ],
+                        response_format={"type": "json_object"},
+                    )
+                    data = json.loads(resp.choices[0].message.content or "{}")
+                    for s in data.get("sparks", []):
+                        t = (s.get("text") or "").strip()
+                        if t:
+                            sparks.append({"text": t, "type": s.get("type", "note")})
+                except Exception:
+                    raise
     return sparks
 
 
