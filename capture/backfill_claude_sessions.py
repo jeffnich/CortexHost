@@ -37,7 +37,7 @@ PROJECTS_DIR = Path.home() / ".claude" / "projects"
 COWORK_DIR = Path.home() / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"
 STATE_FILE = ROOT / ".cortex_session_backfill_state.json"
 
-QDRANT_URL = os.getenv("DEDUP_QDRANT_URL", "https://qdrant-production-8b89.up.railway.app").rstrip("/")
+QDRANT_URL = (os.getenv("QDRANT_URL") or os.getenv("DEDUP_QDRANT_URL", "")).rstrip("/")  # legacy; only used by is_dup fallback
 QDRANT_KEY = os.getenv("QDRANT_CLOUD_API_KEY", "")
 COLLECTION = os.getenv("QDRANT_COLLECTION", "memories")
 TENANT = os.getenv("CORTEX_TENANT_ID", "")
@@ -184,46 +184,21 @@ def is_dup(vec) -> bool:
 
 
 def push(sparks: list[dict], project: str, session_id: str, source: str = "claude-code") -> int:
+    """Push sparks through the cloud MCP (single capture pipeline; content-hash
+    dedupe keys make re-runs idempotent). Direct Qdrant writes are gone -- the
+    old public endpoint no longer exists and capture must never need one."""
     if not sparks:
         return 0
-    vecs = embed_batch([s["text"] for s in sparks])
-    points = []
-    for s, v in zip(sparks, vecs):
-        if is_dup(v):
-            continue
-        now = datetime.now(timezone.utc)
-        mid = str(uuid.uuid4())
-        points.append(
-            {
-                "id": mid,
-                "vector": v,
-                "payload": {
-                    "memory_id": mid,
-                    "id": mid,
-                    "text": s["text"],
-                    "user_id": SCOPED_USER,
-                    "tenant_id": TENANT,
-                    "tenantId": TENANT,
-                    "created_at": now.isoformat(),
-                    "created_at_ts": now.timestamp(),
-                    "updated_at": now.isoformat(),
-                    "updated_at_ts": now.timestamp(),
-                    "source": source,
-                    "tags": [source, project, s["type"]],
-                    "type_hint": s["type"],
-                    "metadata": {"channel": f"{source}-backfill", "project": project, "session": session_id},
-                },
-            }
-        )
-    if not points:
-        return 0
-    requests.put(
-        f"{QDRANT_URL}/collections/{COLLECTION}/points?wait=false",
-        json={"points": points},
-        headers={"api-key": QDRANT_KEY},
-        timeout=60,
-    ).raise_for_status()
-    return len(points)
+    import hashlib
+    import cortex_ingest as ci
+    records = []
+    for s in sparks:
+        h = hashlib.sha1(s["text"].encode()).hexdigest()[:16]
+        records.append({"text": s["text"], "type": s["type"],
+                        "dedupe_key": f"cc:{session_id}:{h}",
+                        "tags": [source, project, s["type"]]})
+    res = ci.push(records, source=source, default_tags=[source], log=lambda *a, **k: None)
+    return int(res.get("stored", 0))
 
 
 def load_state() -> dict:
