@@ -180,6 +180,17 @@ def main():
         log(sid, project, "allow", f"import-error:{type(e).__name__}")
         return
 
+    # Quota guard: if the LLM/embedding account is dead, DO NOT mark this
+    # session captured -- bail without writing the outbox so a later run
+    # (post-refill sweep) retries it. Prevents silent data loss.
+    try:
+        import cortex_ingest as _ci
+        _ci._openai.embeddings.create(model="text-embedding-3-small", input="probe")
+    except Exception as e:
+        if "insufficient_quota" in str(e) or "RateLimitError" in type(e).__name__:
+            log(sid, project, "allow", "skipped-quota-dead")
+            job_path.unlink(missing_ok=True)
+            return
     text, n_turns = parse_transcript(Path(job["transcript_path"]))
     if n_turns < MIN_TURNS:
         log(sid, project, "allow", f"too-short:{n_turns}turns")
