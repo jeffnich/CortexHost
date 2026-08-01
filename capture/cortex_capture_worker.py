@@ -155,10 +155,24 @@ def main():
     OUTBOX.mkdir(parents=True, exist_ok=True)
     out_path = OUTBOX / f"{sid}.json"
 
-    if out_path.exists():  # idempotency: dedupe by session_id
-        log(sid, project, "allow", "dup-skip")
-        job_path.unlink(missing_ok=True)
-        return
+    if out_path.exists():
+        # A session can end more than once (long-lived sessions get resumed).
+        # Re-capture when the transcript has grown since the last capture --
+        # spark-level content-hash dedupe keys make overlap harmless. Only
+        # skip when nothing new happened.
+        try:
+            prev = json.loads(out_path.read_text())
+            prev_ts = datetime.fromisoformat(prev.get("captured_at", "1970-01-01T00:00:00+00:00")).timestamp()
+            tr = Path(job["transcript_path"])
+            if not tr.exists() or tr.stat().st_mtime <= prev_ts:
+                log(sid, project, "allow", "dup-skip")
+                job_path.unlink(missing_ok=True)
+                return
+            log(sid, project, "allow", "recapture-grown")
+        except Exception:
+            log(sid, project, "allow", "dup-skip")
+            job_path.unlink(missing_ok=True)
+            return
 
     try:
         from backfill_claude_sessions import parse_transcript, distill  # reuse condenser
