@@ -85,7 +85,13 @@ def main():
             print(f"DECISION: SKIP (cwd not on allowlist): {cwd}\n" + line, end="")
         return
 
-    # gate 3: transcript must exist
+    # gate 3: transcript must exist (fall back to the canonical CLI location --
+    # some hosts hand us a payload path that does not survive session teardown)
+    if not transcript or not Path(transcript).exists():
+        slug = str(cwd).replace("/", "-")
+        cand = Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+        if cand.exists():
+            transcript = str(cand)
     if not transcript or not Path(transcript).exists():
         line = log(session_id, project, "allow", "skipped-no-transcript")
         if dry:

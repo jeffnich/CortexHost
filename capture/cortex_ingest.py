@@ -143,6 +143,25 @@ async def _push_async(records, source, default_tags, log):
     return {"stored": stored, "skipped": skipped, "errors": errors, "total": len(records)}
 
 
+async def _recent_count_async(source, days):
+    async with streamablehttp_client(MCP_URL) as (r, w, _):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            res = await s.call_tool("recent_memories", {"days": days, "limit": 1, "source": source})
+            txt = res.content[0].text if res.content else "{}"
+            data = json.loads(txt)
+            if isinstance(data, dict) and isinstance(data.get("result"), str):
+                data = json.loads(data["result"])
+            return int(data.get("count", 0))
+
+
+def recent_count(source, days=7):
+    """How many memories from `source` landed in the last N days (via cloud MCP)."""
+    if not MCP_URL:
+        raise SystemExit("CORTEX_MCP_URL not set in .env")
+    return asyncio.run(_recent_count_async(source, days))
+
+
 def push(records, source, default_tags=None, log=print):
     """Push records [{text, type?, when?, dedupe_key?, tags?}] via the cloud MCP."""
     if not MCP_URL:

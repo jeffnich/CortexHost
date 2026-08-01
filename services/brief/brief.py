@@ -106,9 +106,12 @@ def recent(hours=LOOKBACK_H):
     return rows
 
 
-def latest_by_source(source, n=3):
+def latest_by_source(source, n=3, max_age_h=None):
     pts = _scroll(_user_flt([{"key": "source", "match": {"value": source}}]), limit=120)
     pts.sort(key=lambda p: p.get("payload", {}).get("created_at_ts", 0), reverse=True)
+    if max_age_h:
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_h * 3600
+        pts = [p for p in pts if (p.get("payload", {}).get("created_at_ts") or 0) >= cutoff]
     return [p.get("payload", {}).get("text", "") for p in pts[:n]]
 
 
@@ -202,7 +205,7 @@ def generate():
     """Pull -> synthesize -> store. Returns (date_str, brief_dict)."""
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     rows = recent()
-    oura = latest_by_source("oura", 3)
+    oura = latest_by_source("oura", 3, max_age_h=48)  # dead feeds must not masquerade as yesterday
     prior = [h["brief"] for h in history(3) if h.get("brief")]
     b = synthesize(rows, oura, prior=prior)
     try:
