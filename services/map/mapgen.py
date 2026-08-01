@@ -183,6 +183,23 @@ def _set_demo_personal(ids, flag):
                       headers={"api-key": KEY}, timeout=60).raise_for_status()
 
 
+def retire_tagged(pairs, log=print):
+    """One-shot: permanently delete points matching (source, tag) pairs."""
+    total = 0
+    for src, tag in pairs:
+        flt = {"must": [{"key": "user_id", "match": {"value": SCOPED_USER}},
+                        {"key": "source", "match": {"value": src}},
+                        {"key": "tags", "match": {"value": tag}}]}
+        n = requests.post(f"{URL}/collections/{COLLECTION}/points/count",
+                          json={"filter": flt, "exact": True},
+                          headers={"api-key": KEY}, timeout=60).json()["result"]["count"]
+        requests.post(f"{URL}/collections/{COLLECTION}/points/delete?wait=true",
+                      json={"filter": flt}, headers={"api-key": KEY}, timeout=300).raise_for_status()
+        log(f"retire: deleted {n} points (source={src}, tag={tag})")
+        total += n
+    return total
+
+
 def classify_untagged(limit=None, log=print):
     """Scroll points lacking a demo_personal verdict, classify (heuristic + LLM),
     cache the verdict in the payload. Incremental + idempotent."""

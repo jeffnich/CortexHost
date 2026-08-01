@@ -94,7 +94,9 @@ def recent(hours=LOOKBACK_H):
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
     flt = _user_flt([{"key": "created_at_ts", "range": {"gte": cutoff}}])
     # don't feed the brief its own past output (or foresight) back in -> echo chamber
-    flt["must_not"] = [{"key": "source", "match": {"any": ["cortex-brief", "foresight"]}}]
+    # exclude self-output AND machine-written sources (e.g. obsidian agent notes):
+    # the brief reports what the USER did, not what their automations wrote
+    flt["must_not"] = [{"key": "source", "match": {"any": ["cortex-brief", "foresight", "obsidian", "cortex-health"]}}]
     pts = _scroll(flt, limit=800)
     rows = []
     for p in pts:

@@ -31,6 +31,14 @@ def main():
             print(f"retire: done (~{n} points removed for {srcs})", flush=True)
         except Exception as e:
             print(f"retire error: {type(e).__name__}: {e}", flush=True)
+    rt = os.environ.get("RETIRE_TAGGED", "").strip()
+    if rt and rt.lower() not in ("0", "false", "off"):
+        # format: "source:tag,source:tag" — one-shot permanent delete
+        try:
+            pairs = [tuple(x.split(":", 1)) for x in rt.split(",") if ":" in x]
+            mapgen.retire_tagged(pairs, log=lambda m: print(m, flush=True))
+        except Exception as e:
+            print(f"retire_tagged error: {type(e).__name__}: {e}", flush=True)
     if os.environ.get("RECLASSIFY", "").strip().lower() not in ("", "0", "false", "off"):
         # one-shot: wipe cached verdicts so the classifier reruns against the
         # CURRENT CORTEX_EXCLUDE (set RECLASSIFY=1, deploy, then unset)
