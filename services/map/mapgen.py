@@ -448,7 +448,9 @@ const cv=document.getElementById('c'),ctx=cv.getContext('2d'),tip=document.getEl
 const buf=document.createElement('canvas'),bx=buf.getContext('2d');
 function genColor(i){const h=(20+i*137.508)%360;const l=56+((i*47)%20);return 'hsl('+(h|0)+',72%,'+l+'%)'}
 const DPR=devicePixelRatio||1;
-let W,H,view={x:0,y:0,s:1},target={x:0,y:0,s:1},colorBy='source',q='',flash=null,flashT=0,pmode='recent',focusC=null,dirty=true,t0=performance.now();
+let W,H,view={x:0,y:0,s:1},target={x:0,y:0,s:1},colorBy='source',q='',flash=null,flashT=0,pmode='recent',focusC=null,dirty=true,t0=performance.now(),lastActive=performance.now(),idleDrawn=false;
+const poke=()=>{lastActive=performance.now()};
+addEventListener('pointermove',poke,{passive:true});addEventListener('wheel',poke,{passive:true});addEventListener('pointerdown',poke);addEventListener('keydown',poke);addEventListener('touchstart',poke,{passive:true});
 const hidden=new Set();
 const srcColor={};D.sources.forEach((s,i)=>srcColor[s]=genColor(i));
 function colorOf(p){if(DEMO&&p[6])return '#34343e';return colorBy==='source'?srcColor[p[2]]:genColor(p[3])}
@@ -466,14 +468,21 @@ function renderPoints(){
 }
 function frame(ts){
  let moving=false;for(const k of['x','y','s']){const d=target[k]-view[k];if(Math.abs(d)>(k==='s'?1e-4:0.4)){view[k]+=d*0.2;moving=true}else view[k]=target[k]}
- if(moving)dirty=true;if(dirty){renderPoints();dirty=false}
+ if(moving)dirty=true;
+ // Idle throttle: composite only while interacting (+4s grace). When idle,
+ // draw ONE clean final frame (no light beam) and then stop touching the
+ // GPU entirely -- an open map tab should cost nothing, not run a shimmer
+ // at 60fps forever. Any pointer/wheel/key activity wakes it instantly.
+ const active=moving||dirty||flash!=null||(ts-lastActive<4000);
+ if(!active&&idleDrawn){requestAnimationFrame(frame);return}
+ if(dirty){renderPoints();dirty=false}
  const g=ctx.createRadialGradient(W*0.5,H*0.42,0,W*0.5,H*0.42,Math.max(W,H)*0.8);
  g.addColorStop(0,'#0d0d1c');g.addColorStop(.55,'#08080f');g.addColorStop(1,'#050508');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
  const li=Math.min(1,(ts-t0)/1300);ctx.globalAlpha=li;ctx.drawImage(buf,0,0);ctx.globalAlpha=1;
- const sx=((ts/9000)%1.4-0.2)*W,sw=160*DPR;const sg=ctx.createLinearGradient(sx-sw,0,sx+sw,0);
- sg.addColorStop(0,'#ff8a5c00');sg.addColorStop(.5,'#ff8a5c0e');sg.addColorStop(1,'#ff8a5c00');ctx.fillStyle=sg;ctx.fillRect(sx-sw,0,sw*2,H);
+ if(active){const sx=((ts/9000)%1.4-0.2)*W,sw=160*DPR;const sg=ctx.createLinearGradient(sx-sw,0,sx+sw,0);
+ sg.addColorStop(0,'#ff8a5c00');sg.addColorStop(.5,'#ff8a5c0e');sg.addColorStop(1,'#ff8a5c00');ctx.fillStyle=sg;ctx.fillRect(sx-sw,0,sw*2,H)}
  if(flash!=null){const a=Math.max(0,1-(ts-flashT)/1500);if(a>0){const p=D.points[flash];ctx.strokeStyle='rgba(255,220,200,'+a+')';ctx.lineWidth=2*DPR;ctx.beginPath();ctx.arc(tx(p[0]),ty(p[1]),(6+32*(1-a))*DPR,0,7);ctx.stroke()}else flash=null}
- drawLabels();requestAnimationFrame(frame);
+ drawLabels();idleDrawn=!active;requestAnimationFrame(frame);
 }
 function clusters(){if(window._cl)return window._cl;const m={};for(let i=0;i<D.points.length;i++){const p=D.points[i],c=p[3];(m[c]=m[c]||{members:[],sx:0,sy:0}).members.push(i);m[c].sx+=p[0];m[c].sy+=p[1]}
  window._cl=Object.entries(m).map(([c,o])=>({c:+c,name:D.clusterNames[c]||('topic '+c),n:o.members.length,cx:o.sx/o.members.length,cy:o.sy/o.members.length,members:o.members})).sort((a,b)=>b.n-a.n);return window._cl}
