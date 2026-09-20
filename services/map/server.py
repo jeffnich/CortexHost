@@ -42,6 +42,12 @@ AUTH_TOKEN = hashlib.sha256(("cortex:" + PASSWORD).encode()).hexdigest() if PASS
 OUT = "/tmp/map.html"
 DEMO_OUT = "/tmp/demo.html"
 CHILD = str(Path(__file__).resolve().parent / "regen_child.py")
+# Direct Qdrant access for the export route only (kept out of mapgen so the
+# always-on parent never imports numpy/UMAP).
+Q_URL = (os.environ.get("QDRANT_URL") or os.environ.get("DEDUP_QDRANT_URL", "")).rstrip("/")
+Q_KEY = os.environ.get("QDRANT_API_KEY") or os.environ.get("QDRANT_CLOUD_API_KEY", "")
+Q_COLL = os.environ.get("QDRANT_COLLECTION", "memories")
+Q_SCOPED = f"{os.environ.get('CORTEX_TENANT_ID','')}:{os.environ.get('CORTEX_USER_ID','')}"
 try:
     HOW_HTML = (Path(__file__).resolve().parent / "how.html").read_text()
 except Exception:
@@ -142,11 +148,42 @@ class H(http.server.BaseHTTPRequestHandler):
             return True  # no gate configured -> full map stays open
         return ("cx_auth=" + AUTH_TOKEN) in self.headers.get("Cookie", "")
 
+    def _stream_export(self):
+        """Full-corpus JSONL export (payloads + vectors) for offline backup.
+        Gated by the MAP secret: the same trust level as the full map. Note:
+        MAP_PASSWORD does NOT gate this route (backup scripts can't do the
+        cookie dance) -- the unguessable path is the credential."""
+        import json as _json
+        import requests as _rq
+        self.send_response(200)
+        self.send_header("Content-Type", "application/jsonl")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        offset = None
+        while True:
+            body = {"limit": 512, "with_payload": True, "with_vector": True,
+                    "filter": {"must": [{"key": "user_id", "match": {"value": Q_SCOPED}}]}}
+            if offset is not None:
+                body["offset"] = offset
+            res = _rq.post(f"{Q_URL}/collections/{Q_COLL}/points/scroll", json=body,
+                           headers={"api-key": Q_KEY}, timeout=120).json()["result"]
+            for pt in res["points"]:
+                self.wfile.write((_json.dumps(pt) + "\n").encode())
+            offset = res.get("next_page_offset")
+            if offset is None:
+                break
+
     def do_GET(self):
         path = self.path.split("?")[0].rstrip("/")
         seg = path.strip("/").split("/")
         secret = seg[0] if seg else ""
         page = seg[1] if len(seg) > 1 else ""
+        if secret == SECRET and page == "export.jsonl":
+            try:
+                self._stream_export()
+            except Exception as e:
+                print(f"export error: {type(e).__name__}: {e}", flush=True)
+            return
         if secret == SECRET and page in ("map.html", ""):
             if not self._authed():
                 self._send(login_page())
