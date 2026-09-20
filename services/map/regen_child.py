@@ -39,6 +39,38 @@ def main():
             mapgen.retire_tagged(pairs, log=lambda m: print(m, flush=True))
         except Exception as e:
             print(f"retire_tagged error: {type(e).__name__}: {e}", flush=True)
+    rc = os.environ.get("RETAG_COWORK", "").strip().lower()
+    if rc and rc not in ("0", "false", "off"):
+        # one-shot: fix sparks mislabeled source=claude-code that carry a
+        # cowork:<name> tag (backfill --source omission, Sep 19 2026).
+        # Runs before classify so they get LLM privacy review, not the
+        # claude-code always-public heuristic. No-op once retagged.
+        try:
+            import requests as _rq
+            ids, offset = [], None
+            while True:
+                body = {"limit": 512, "with_payload": ["tags"], "with_vector": False,
+                        "filter": {"must": [
+                            {"key": "user_id", "match": {"value": mapgen.SCOPED_USER}},
+                            {"key": "source", "match": {"value": "claude-code"}}]}}
+                if offset is not None:
+                    body["offset"] = offset
+                res = _rq.post(f"{mapgen.URL}/collections/{mapgen.COLLECTION}/points/scroll",
+                               json=body, headers={"api-key": mapgen.KEY}, timeout=120).json()["result"]
+                for pt in res["points"]:
+                    tags = (pt.get("payload") or {}).get("tags") or []
+                    if any(str(tg).startswith("cowork") for tg in tags):
+                        ids.append(pt["id"])
+                offset = res.get("next_page_offset")
+                if offset is None:
+                    break
+            for i in range(0, len(ids), 256):
+                _rq.post(f"{mapgen.URL}/collections/{mapgen.COLLECTION}/points/payload?wait=true",
+                         json={"payload": {"source": "cowork"}, "points": ids[i:i + 256]},
+                         headers={"api-key": mapgen.KEY}, timeout=120).raise_for_status()
+            print(f"retag: {len(ids)} claude-code points with cowork tags -> source=cowork", flush=True)
+        except Exception as e:
+            print(f"retag error: {type(e).__name__}: {e}", flush=True)
     if os.environ.get("RECLASSIFY", "").strip().lower() not in ("", "0", "false", "off"):
         # one-shot: wipe cached verdicts so the classifier reruns against the
         # CURRENT CORTEX_EXCLUDE (set RECLASSIFY=1, deploy, then unset)

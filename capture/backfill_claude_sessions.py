@@ -214,8 +214,9 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--cowork", action="store_true", help="walk the Cowork/local-agent-mode store instead of ~/.claude/projects")
-    ap.add_argument("--source", default="claude-code", help="source tag for stored memories")
+    ap.add_argument("--source", default=None, help="source tag for stored memories (default: cowork with --cowork, else claude-code)")
     args = ap.parse_args()
+    args.source = args.source or ("cowork" if args.cowork else "claude-code")
     execute = bool(args.execute) and not args.dry_run
 
     state = {"done": [], "sparks": 0} if args.fresh else load_state()
