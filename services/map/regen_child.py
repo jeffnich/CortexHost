@@ -71,15 +71,21 @@ def main():
             print(f"retag: {len(ids)} claude-code points with cowork tags -> source=cowork", flush=True)
         except Exception as e:
             print(f"retag error: {type(e).__name__}: {e}", flush=True)
-    if os.environ.get("RECLASSIFY", "").strip().lower() not in ("", "0", "false", "off"):
-        # one-shot: wipe cached verdicts so the classifier reruns against the
-        # CURRENT CORTEX_EXCLUDE (set RECLASSIFY=1, deploy, then unset)
+    rcl = os.environ.get("RECLASSIFY", "").strip()
+    if rcl and rcl.lower() not in ("0", "false", "off"):
+        # one-shot: wipe cached verdicts so the classifier re-reviews.
+        # RECLASSIFY=1/true = the whole corpus; RECLASSIFY=<source> = only
+        # that source (e.g. RECLASSIFY=cowork). Deploy, verify, then unset.
         import requests
+        must = [{"key": "user_id", "match": {"value": mapgen.SCOPED_USER}}]
+        scope = "all"
+        if rcl.lower() not in ("1", "true", "yes"):
+            must.append({"key": "source", "match": {"value": rcl}})
+            scope = f"source={rcl}"
         requests.post(f"{mapgen.URL}/collections/{mapgen.COLLECTION}/points/payload/delete?wait=true",
-                      json={"keys": ["demo_personal"],
-                            "filter": {"must": [{"key": "user_id", "match": {"value": mapgen.SCOPED_USER}}]}},
+                      json={"keys": ["demo_personal"], "filter": {"must": must}},
                       headers={"api-key": mapgen.KEY}, timeout=300).raise_for_status()
-        print("reclassify: cleared cached demo_personal verdicts", flush=True)
+        print(f"reclassify: cleared cached demo_personal verdicts ({scope})", flush=True)
     if os.environ.get("OPENAI_API_KEY"):
         try:
             mapgen.classify_untagged(log=lambda m: print(m, flush=True))
