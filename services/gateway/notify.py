@@ -138,3 +138,37 @@ def from_config(cfg) -> "Notifier | None":
     else:
         return None
     return Notifier(t, cfg.pings_per_hour)
+
+
+ROUTINE_BETA = "experimental-cc-routine-2026-04-01"
+
+
+def waker_from_config(cfg, post=_post, per_hour: int = 20, background: bool = True):
+    """Wake the owner's triage agent (a Claude routine) on each new request.
+
+    The payload is the request id and kind, nothing a visitor wrote: the agent
+    reads the request itself through the triage tier, where it is labelled
+    untrusted. Capped per hour so a flood can't burn the owner's usage; over
+    the cap, requests wait for the next scheduled triage run.
+    """
+    if not (cfg.wake_url and cfg.wake_token):
+        return None
+    limiter = RateLimiter()
+    headers = {"Authorization": f"Bearer {cfg.wake_token}", "anthropic-version": "2023-06-01",
+               "anthropic-beta": ROUTINE_BETA, "Content-Type": "application/json"}
+
+    def deliver(payload: bytes) -> None:
+        try:
+            post(cfg.wake_url, payload, headers)
+        except Exception as exc:
+            print(f"wake failed: {exc!r}", file=sys.stderr, flush=True)
+
+    def wake(*, kind: str, request_id: str) -> None:
+        if limiter.check("wake", per_hour, 3600):
+            return
+        payload = json.dumps({"text": f"new {kind} request {request_id}"}).encode()
+        if background:
+            threading.Thread(target=deliver, args=(payload,), daemon=True).start()
+        else:
+            deliver(payload)
+    return wake

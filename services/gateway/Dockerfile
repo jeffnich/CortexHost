@@ -4,7 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py store.py guard.py public_profile.py availability.py notify.py ./
-COPY profile.example.md ./
+COPY profile.example.md triage_agent.md ./
 
 # Queue + audit log live here; mount a volume so they survive redeploys.
 RUN mkdir -p /data

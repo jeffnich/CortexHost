@@ -63,6 +63,27 @@ either. Avoid the "secret address", which carries full event details.
 `CORTEX_TZ`, `GATEWAY_WORK_HOURS` (default 09:00-17:00) and
 `GATEWAY_WORK_DAYS` (default mon-fri) shape the answer.
 
+## Triage: an agent reads first
+
+The gateway is agent-to-agent, so Jeff should not see every request. A third
+tier, the triage tier at `/<GATEWAY_TRIAGE_SECRET>/mcp`, lets his own triage
+agent list new requests and record a verdict (`escalate`, `digest`,
+`suggest_decline`, `noise`), a one-line summary and a draft reply. It has no
+tool to resolve, reply, or reach memory: the agent reads strangers' text, so it
+gets nothing that acts on it. Jeff sees the triage on `list_requests` and sends
+a draft with `resolve_request` when he says go.
+
+The triage agent's standing prompt is `services/gateway/triage_agent.md`. It
+runs as a scheduled Claude task twice a day (a digest with push notification
+only when something is noteworthy). Optionally set `GATEWAY_WAKE_URL` and
+`GATEWAY_WAKE_TOKEN` to a Claude routine's API fire URL so each new request
+wakes the agent at once. The payload is only the request id; the agent reads
+the request itself through the triage tier. Wakes are capped at 20 an hour.
+
+Autonomy is a dial, raised one capability at a time: draft-only today; later,
+let the triage tier auto-send `suggest_decline` drafts or answer routine asks
+inside a written policy, each as a separately granted tool.
+
 ## Instant pings
 
 Every new meeting request or message pings the owner with
