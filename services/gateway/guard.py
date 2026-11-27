@@ -5,6 +5,7 @@ and attributable before it touches the queue or the audit log.
 """
 
 import hashlib
+import ipaddress
 import re
 import threading
 import time
@@ -43,6 +44,20 @@ def hash_ip(ip: str | None, salt: str) -> str | None:
     if not ip:
         return None
     return hashlib.sha256(f"{salt}:{ip}".encode()).hexdigest()[:16]
+
+
+def network_of(ip: str | None) -> str | None:
+    """The caller's network: /24 for IPv4, /48 for IPv6. Unparseable -> as given."""
+    if not ip:
+        return None
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    prefix = 24 if addr.version == 4 else 48
+    return str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False))
 
 
 class RateLimiter:

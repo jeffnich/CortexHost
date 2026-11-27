@@ -63,6 +63,25 @@ either. Avoid the "secret address", which carries full event details.
 `CORTEX_TZ`, `GATEWAY_WORK_HOURS` (default 09:00-17:00) and
 `GATEWAY_WORK_DAYS` (default mon-fri) shape the answer.
 
+## Instant pings
+
+Set `GATEWAY_NTFY_URL` to an ntfy topic (e.g. `https://ntfy.sh/<long random
+string>`) and subscribe to the same topic in the ntfy phone app. Every new
+meeting request or message pushes "name: subject · request id". Visitor text
+goes only in the body, as plain text, with links neutered and length capped.
+Contact details and message bodies are not sent. After
+`GATEWAY_PINGS_PER_HOUR` (default 10) pings in an hour you get one "paused"
+notice and silence until the hour rolls over; requests still queue normally.
+The topic name is the secret: anyone who knows it can read the pings.
+
+## Rate limits and hosted agents
+
+Hosted agents (claude.ai's connector proxy and similar) rotate through a pool
+of IPs, so limits key on the caller's network (/24 IPv4, /48 IPv6) rather
+than the exact address. The catch: every visitor coming through the same
+hosted proxy shares one budget. Per-visitor limits arrive with phase 2
+OAuth grants, which give each caller a real identity.
+
 ## Run it
 
 Locally it is part of `docker compose up` on port 8303. Write your profile:

@@ -40,6 +40,10 @@ Env:
   CORTEX_TZ                owner's time zone for availability (default UTC)
   GATEWAY_WORK_HOURS       e.g. 09:00-17:00 (default)
   GATEWAY_WORK_DAYS        e.g. mon-fri (default)
+  GATEWAY_NTFY_URL         ntfy topic URL for instant pings on new requests,
+                           e.g. https://ntfy.sh/<long-random-topic>. Unset = no pings.
+  GATEWAY_NTFY_TOKEN       optional ntfy access token for a protected topic
+  GATEWAY_PINGS_PER_HOUR   push cap before pings pause for the hour (default 10)
 
 Permission levels (see TOOL_PERMISSIONS): "auto" tools answer immediately from
 owner-approved material only; "queued" tools never answer for the owner, they
@@ -63,8 +67,9 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from guard import RateLimiter, clean_label, clean_text, hash_ip
+from guard import RateLimiter, clean_label, clean_text, hash_ip, network_of
 from availability import FreeBusy
+from notify import Notifier
 from public_profile import Profile
 from store import REQUEST_STATUSES, Store
 
@@ -111,6 +116,9 @@ class Config:
     tz: str = "UTC"
     work_hours: str = "09:00-17:00"
     work_days: str = "mon-fri"
+    ntfy_url: str = ""
+    ntfy_token: str = ""
+    pings_per_hour: int = 10
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -139,6 +147,9 @@ class Config:
             tz=e.get("CORTEX_TZ", "UTC") or "UTC",
             work_hours=e.get("GATEWAY_WORK_HOURS", "09:00-17:00"),
             work_days=e.get("GATEWAY_WORK_DAYS", "mon-fri"),
+            ntfy_url=e.get("GATEWAY_NTFY_URL", "").strip(),
+            ntfy_token=e.get("GATEWAY_NTFY_TOKEN", "").strip(),
+            pings_per_hour=int(e.get("GATEWAY_PINGS_PER_HOUR", 10)),
         )
 
 
@@ -156,6 +167,7 @@ class Gateway:
             FreeBusy(cfg.freebusy_url, cfg.tz, cfg.work_hours, cfg.work_days) if cfg.freebusy_url else None
         )
         self.limiter = RateLimiter()
+        self.notifier = Notifier(cfg.ntfy_url, cfg.ntfy_token, cfg.pings_per_hour) if cfg.ntfy_url else None
         # Remote connectors arrive with varied Host/Origin headers; the owner
         # path secret is the owner boundary and the public tier is public.
         security = TransportSecuritySettings(
@@ -210,7 +222,14 @@ class Gateway:
         if not label:
             hay = f"{client_name or ''} {ua or ''}".lower()
             label = next((lbl for pat, lbl in _CLIENT_PATTERNS if pat in hay), None) or clean_label(client_name)
-        return {"client": label or "unknown", "ip_hash": hash_ip(ip, self.cfg.ip_salt)}
+        return {
+            "client": label or "unknown",
+            "ip_hash": hash_ip(ip, self.cfg.ip_salt),
+            # Rate limits key on the caller's network, not its exact IP: hosted
+            # agents (claude.ai and others) rotate through a pool of proxy IPs
+            # per request, which would otherwise dodge any per-IP limit.
+            "rate_key": hash_ip(network_of(ip), self.cfg.ip_salt),
+        }
 
     def _call(self, tier: str, tool: str, ctx: Context | None, args: dict, fn, *, write: bool = False) -> str:
         """Run one tool call: rate limit (public), execute, audit. Returns JSON text."""
@@ -227,7 +246,7 @@ class Gateway:
             return json.dumps(payload, default=str)
 
         if tier == "public":
-            who = caller["ip_hash"] or caller["client"]
+            who = caller.get("rate_key") or caller["client"]
             wait = self.limiter.check(f"calls:{who}", self.cfg.calls_per_10min, 600)
             if not wait and write:
                 wait = self.limiter.check(f"writes:{who}", self.cfg.writes_per_hour, 3600)
@@ -409,6 +428,9 @@ class Gateway:
             kind=kind, from_name=args["your_name"], from_contact=args["your_contact"],
             subject=subject, body=body, details=details, client=caller["client"], ip_hash=caller["ip_hash"],
         )
+        if self.notifier:
+            self.notifier.request_received(kind=kind, request_id=rid, from_name=args["your_name"],
+                                           subject=subject, client=caller["client"])
         return {
             "request_id": rid,
             "status_token": token,

@@ -353,3 +353,75 @@ def test_every_public_tool_has_a_permission(tmp_path):
     gw = make_gateway(tmp_path)
     assert tool_names(gw.public) == set(TOOL_PERMISSIONS)
     assert TOOL_PERMISSIONS["request_meeting"] == "queued" and TOOL_PERMISSIONS["leave_message"] == "queued"
+
+
+# ---- instant pings ------------------------------------------------------------
+
+from guard import network_of  # noqa: E402
+from notify import Notifier, defang  # noqa: E402
+
+
+def capture_notifier(**kw):
+    sent = []
+    n = Notifier("https://ntfy.invalid/topic", post=lambda url, body, headers: sent.append((body.decode(), headers)),
+                 background=False, **kw)
+    return n, sent
+
+
+def test_defang_neuters_links_and_caps_length():
+    s = defang("see https://evil.example/x and www.bad.io or phish.com​ now " + "x" * 300, 80)
+    assert "http" not in s and "www." not in s and "phish.com" not in s and "phish[.]com" in s
+    assert len(s) <= 80
+
+
+def test_new_request_pings_owner_with_untrusted_text_in_body_only(tmp_path):
+    gw = make_gateway(tmp_path)
+    gw.notifier, sent = capture_notifier()
+    req = call(gw.public, "leave_message", your_name="Sam https://x.example", your_contact="sam@example.com",
+               subject="Click http://bad.example now", message="hello")
+    assert req["ok"] and len(sent) == 1
+    body, headers = sent[0]
+    assert headers["Title"] == "Gateway: new message" and headers["Markdown"] == "no"
+    assert "http" not in body and req["request_id"] in body and "sam@example.com" not in body
+    assert all("Sam" not in v and "Click" not in v for v in headers.values())
+
+
+def test_pings_pause_once_when_flooded():
+    n, sent = capture_notifier(per_hour=2)
+    for i in range(6):
+        n.request_received(kind="message", request_id=f"req_{i}", from_name="a", subject="b", client="c")
+    titles = [h["Title"] for _, h in sent]
+    assert titles == ["Gateway: new message", "Gateway: new message", "Gateway: notifications paused"]
+
+
+def test_failed_ping_never_fails_the_request(tmp_path):
+    gw = make_gateway(tmp_path)
+
+    def boom(*_a):
+        raise OSError("ntfy down")
+
+    gw.notifier = Notifier("https://ntfy.invalid/t", post=boom, background=False)
+    assert call(gw.public, "leave_message", your_name="a", your_contact="b", subject="s", message="m")["ok"]
+
+
+def test_no_ping_without_config(tmp_path):
+    assert make_gateway(tmp_path).notifier is None
+
+
+# ---- rate limits across rotating proxy IPs -----------------------------------
+
+def test_network_of():
+    assert network_of("160.79.106.141") == network_of("160.79.106.17") == "160.79.106.0/24"
+    assert network_of("::ffff:160.79.106.5") == "160.79.106.0/24"
+    assert network_of("2001:db8:1:2::1") == "2001:db8:1::/48"
+    assert network_of(None) is None and network_of("garbage") == "garbage"
+
+
+def test_rotating_proxy_ips_share_one_write_budget(tmp_path):
+    gw = make_gateway(tmp_path, writes_per_hour=2)
+    ips = iter(["160.79.106.10", "160.79.106.20", "160.79.106.30"])
+    gw._caller = lambda ctx: (lambda ip: {"client": "claude", "ip_hash": ip,
+                                          "rate_key": network_of(ip)})(next(ips))
+    results = [call(gw.public, "leave_message", your_name="a", your_contact="b", subject="s", message="m")
+               for _ in range(3)]
+    assert [r["ok"] for r in results] == [True, True, False] and results[2]["error"] == "rate_limited"
