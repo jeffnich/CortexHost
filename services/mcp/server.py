@@ -104,6 +104,13 @@ def _caller(ctx: Context | None) -> dict:
         pass
 
     client = info.get("label")
+    if not client and "claude-user" in (info.get("user_agent") or "").lower():
+        # Arrived through the claude.ai connector proxy. clientInfo still says
+        # which Claude surface: "claude-ai" for chat, "claude-code" for cloud
+        # agent sessions (claude.ai/code, projects), which would otherwise be
+        # confused with Claude Code running locally.
+        name = (info.get("client_name") or "").lower()
+        client = "claude-code-cloud" if "claude-code" in name else "claude-ai"
     if not client:
         haystack = f"{info.get('client_name') or ''} {info.get('user_agent') or ''}".lower()
         client = next((lbl for pat, lbl in _CLIENT_PATTERNS if pat in haystack), None)

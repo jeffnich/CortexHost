@@ -33,9 +33,9 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
    - **One URL per app.** Append `?client=<name>` (e.g. `...mcp?client=cursor`)
      so every write is stamped with the app that made it (`client` field,
      filterable in `recent_memories`, counted in `memory_stats`). Without it
-     the server falls back to MCP clientInfo / User-Agent, which can't tell
-     apart apps that share one connector (every claude.ai surface reads as
-     `claude-ai`).
+     the server falls back to MCP clientInfo / User-Agent: claude.ai chat
+     reads as `claude-ai`, claude.ai cloud agents as `claude-code-cloud`, but
+     different apps riding the same connector look identical.
    Then test: call `memory_stats` / `search_memory` through the client.
 5. **Import history** (the payoff step):
    - `pip install -r capture/requirements.txt`
