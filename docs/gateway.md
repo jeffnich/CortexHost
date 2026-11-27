@@ -65,14 +65,29 @@ either. Avoid the "secret address", which carries full event details.
 
 ## Instant pings
 
-Set `GATEWAY_NTFY_URL` to an ntfy topic (e.g. `https://ntfy.sh/<long random
-string>`) and subscribe to the same topic in the ntfy phone app. Every new
-meeting request or message pushes "name: subject · request id". Visitor text
-goes only in the body, as plain text, with links neutered and length capped.
-Contact details and message bodies are not sent. After
-`GATEWAY_PINGS_PER_HOUR` (default 10) pings in an hour you get one "paused"
-notice and silence until the hour rolls over; requests still queue normally.
-The topic name is the secret: anyone who knows it can read the pings.
+Every new meeting request or message pings the owner with
+"name: subject · request id". Pick one channel:
+
+- **Email (recommended).** Set `GATEWAY_NOTIFY_EMAIL` and
+  `GATEWAY_RESEND_API_KEY`. One Resend API call sends a plain-text email
+  (no HTML part) to your inbox, so the ping lands in the mail app you
+  already have. The default sender `onboarding@resend.dev` needs no domain
+  but only delivers to your Resend account's own address. Set
+  `GATEWAY_NOTIFY_FROM` once you verify a domain. The subject is fixed text
+  plus the request ID, never visitor text.
+- **ntfy.** Set `GATEWAY_NTFY_URL` to `https://ntfy.sh/<long random topic>`
+  and subscribe to it in the ntfy app. The topic name is the secret.
+
+Email wins if both are set. Visitor text only goes in the body, as plain
+text, with links neutered and length capped. Contact details and message
+bodies are never sent. After `GATEWAY_PINGS_PER_HOUR` (default 10) pings in
+an hour you get one "paused" notice, then nothing until the hour rolls over.
+Requests still queue normally.
+
+Why not push into the Claude app? It has no inbound notification API. A
+Claude Code routine can be fired over HTTP, but every ping would start an
+agent session (usage cost, and visitor text in an agent's context), which
+is the wrong tool for a doorbell.
 
 ## Rate limits and hosted agents
 

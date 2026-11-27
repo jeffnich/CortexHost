@@ -40,7 +40,11 @@ Env:
   CORTEX_TZ                owner's time zone for availability (default UTC)
   GATEWAY_WORK_HOURS       e.g. 09:00-17:00 (default)
   GATEWAY_WORK_DAYS        e.g. mon-fri (default)
-  GATEWAY_NTFY_URL         ntfy topic URL for instant pings on new requests,
+  GATEWAY_NOTIFY_EMAIL     owner's inbox for instant pings on new requests (with
+                           GATEWAY_RESEND_API_KEY). Wins over ntfy if both are set.
+  GATEWAY_RESEND_API_KEY   Resend API key used to send those emails
+  GATEWAY_NOTIFY_FROM      optional sender, default Resend's onboarding@resend.dev
+  GATEWAY_NTFY_URL         alternative: ntfy topic URL for instant pings on new requests,
                            e.g. https://ntfy.sh/<long-random-topic>. Unset = no pings.
   GATEWAY_NTFY_TOKEN       optional ntfy access token for a protected topic
   GATEWAY_PINGS_PER_HOUR   push cap before pings pause for the hour (default 10)
@@ -69,7 +73,7 @@ from starlette.routing import Route
 
 from guard import RateLimiter, clean_label, clean_text, hash_ip, network_of
 from availability import FreeBusy
-from notify import Notifier
+import notify
 from public_profile import Profile
 from store import REQUEST_STATUSES, Store
 
@@ -118,6 +122,9 @@ class Config:
     work_days: str = "mon-fri"
     ntfy_url: str = ""
     ntfy_token: str = ""
+    notify_email: str = ""
+    resend_api_key: str = ""
+    notify_from: str = ""
     pings_per_hour: int = 10
 
     @classmethod
@@ -149,6 +156,9 @@ class Config:
             work_days=e.get("GATEWAY_WORK_DAYS", "mon-fri"),
             ntfy_url=e.get("GATEWAY_NTFY_URL", "").strip(),
             ntfy_token=e.get("GATEWAY_NTFY_TOKEN", "").strip(),
+            notify_email=e.get("GATEWAY_NOTIFY_EMAIL", "").strip(),
+            resend_api_key=e.get("GATEWAY_RESEND_API_KEY", "").strip(),
+            notify_from=e.get("GATEWAY_NOTIFY_FROM", "").strip(),
             pings_per_hour=int(e.get("GATEWAY_PINGS_PER_HOUR", 10)),
         )
 
@@ -167,7 +177,7 @@ class Gateway:
             FreeBusy(cfg.freebusy_url, cfg.tz, cfg.work_hours, cfg.work_days) if cfg.freebusy_url else None
         )
         self.limiter = RateLimiter()
-        self.notifier = Notifier(cfg.ntfy_url, cfg.ntfy_token, cfg.pings_per_hour) if cfg.ntfy_url else None
+        self.notifier = notify.from_config(cfg)
         # Remote connectors arrive with varied Host/Origin headers; the owner
         # path secret is the owner boundary and the public tier is public.
         security = TransportSecuritySettings(

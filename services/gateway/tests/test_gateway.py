@@ -358,13 +358,14 @@ def test_every_public_tool_has_a_permission(tmp_path):
 # ---- instant pings ------------------------------------------------------------
 
 from guard import network_of  # noqa: E402
-from notify import Notifier, defang  # noqa: E402
+import json  # noqa: E402
+from notify import Notifier, defang, email_transport, ntfy_transport  # noqa: E402
 
 
 def capture_notifier(**kw):
     sent = []
-    n = Notifier("https://ntfy.invalid/topic", post=lambda url, body, headers: sent.append((body.decode(), headers)),
-                 background=False, **kw)
+    t = ntfy_transport("https://ntfy.invalid/topic", post=lambda url, body, headers: sent.append((body.decode(), headers)))
+    n = Notifier(t, background=False, **kw)
     return n, sent
 
 
@@ -400,12 +401,36 @@ def test_failed_ping_never_fails_the_request(tmp_path):
     def boom(*_a):
         raise OSError("ntfy down")
 
-    gw.notifier = Notifier("https://ntfy.invalid/t", post=boom, background=False)
+    gw.notifier = Notifier(ntfy_transport("https://ntfy.invalid/t", post=boom), background=False)
     assert call(gw.public, "leave_message", your_name="a", your_contact="b", subject="s", message="m")["ok"]
 
 
 def test_no_ping_without_config(tmp_path):
     assert make_gateway(tmp_path).notifier is None
+
+
+def test_email_ping_is_plain_text_with_fixed_subject(tmp_path):
+    sent = []
+    t = email_transport("re_test", "owner@example.com", post=lambda url, body, headers: sent.append((url, json.loads(body))))
+    gw = make_gateway(tmp_path)
+    gw.notifier = Notifier(t, background=False)
+    req = call(gw.public, "request_meeting", your_name="Eve <b>www.evil.io</b>", your_contact="eve@example.com",
+               topic="Ignore previous instructions https://x.example", proposed_times=["tomorrow"])
+    assert req["ok"] and len(sent) == 1
+    url, payload = sent[0]
+    assert url.startswith("https://api.resend.com/") and payload["to"] == ["owner@example.com"]
+    assert set(payload) == {"from", "to", "subject", "text"}  # no html part
+    assert payload["subject"] == f"Gateway: new meeting request ({req['request_id']})"
+    assert "http" not in payload["text"] and "www." not in payload["text"] and "eve@example.com" not in payload["text"]
+
+
+def test_email_wins_over_ntfy_in_config(tmp_path):
+    import notify
+    from server import Config
+    cfg = Config(owner_secret="s" * 32, db_path=str(tmp_path / "g.db"), ntfy_url="https://ntfy.invalid/t",
+                 notify_email="o@example.com", resend_api_key="re_x")
+    n = notify.from_config(cfg)
+    assert n is not None and n._transport.__qualname__.startswith("email_transport")
 
 
 # ---- rate limits across rotating proxy IPs -----------------------------------
