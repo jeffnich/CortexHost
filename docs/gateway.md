@@ -63,6 +63,65 @@ either. Avoid the "secret address", which carries full event details.
 `CORTEX_TZ`, `GATEWAY_WORK_HOURS` (default 09:00-17:00) and
 `GATEWAY_WORK_DAYS` (default mon-fri) shape the answer.
 
+## Triage: an agent reads first
+
+The gateway is agent-to-agent, so Jeff should not see every request. A third
+tier, the triage tier at `/<GATEWAY_TRIAGE_SECRET>/mcp`, lets his own triage
+agent list new requests and record a verdict (`escalate`, `digest`,
+`suggest_decline`, `noise`), a one-line summary and a draft reply. It has no
+tool to resolve, reply, or reach memory: the agent reads strangers' text, so it
+gets nothing that acts on it. Jeff sees the triage on `list_requests` and sends
+a draft with `resolve_request` when he says go.
+
+The triage agent's standing prompt is `services/gateway/triage_agent.md`. It
+runs as a scheduled Claude task twice a day (a digest with push notification
+only when something is noteworthy). Optionally set `GATEWAY_WAKE_URL` and
+`GATEWAY_WAKE_TOKEN` to a Claude routine's API fire URL so each new request
+wakes the agent at once. The payload is only the request id; the agent reads
+the request itself through the triage tier. Wakes are capped at 20 an hour.
+
+Autonomy is a dial, raised one capability at a time: draft-only today; later,
+let the triage tier auto-send `suggest_decline` drafts or answer routine asks
+inside a written policy, each as a separately granted tool.
+
+## Instant pings
+
+Every new meeting request or message pings the owner with
+"name: subject · request id". Pick one channel (first configured wins):
+
+- **SMS.** Set `GATEWAY_NOTIFY_SMS_TO` (your phone, E.164), plus
+  `GATEWAY_TWILIO_SID`, `GATEWAY_TWILIO_TOKEN` and `GATEWAY_TWILIO_FROM`.
+  US numbers need carrier registration (toll-free verification) before
+  texts deliver, so allow a few business days.
+- **Email.** Set `GATEWAY_NOTIFY_EMAIL` and
+  `GATEWAY_RESEND_API_KEY`. One Resend API call sends a plain-text email
+  (no HTML part) to your inbox, so the ping lands in the mail app you
+  already have. The default sender `onboarding@resend.dev` needs no domain
+  but only delivers to your Resend account's own address. Set
+  `GATEWAY_NOTIFY_FROM` once you verify a domain. The subject is fixed text
+  plus the request ID, never visitor text.
+- **ntfy.** Set `GATEWAY_NTFY_URL` to `https://ntfy.sh/<long random topic>`
+  and subscribe to it in the ntfy app. The topic name is the secret.
+
+Visitor text only goes in the body, as plain
+text, with links neutered and length capped. Contact details and message
+bodies are never sent. After `GATEWAY_PINGS_PER_HOUR` (default 10) pings in
+an hour you get one "paused" notice, then nothing until the hour rolls over.
+Requests still queue normally.
+
+Why not push into the Claude app? It has no inbound notification API. A
+Claude Code routine can be fired over HTTP, but every ping would start an
+agent session (usage cost, and visitor text in an agent's context), which
+is the wrong tool for a doorbell.
+
+## Rate limits and hosted agents
+
+Hosted agents (claude.ai's connector proxy and similar) rotate through a pool
+of IPs, so limits key on the caller's network (/24 IPv4, /48 IPv6) rather
+than the exact address. The catch: every visitor coming through the same
+hosted proxy shares one budget. Per-visitor limits arrive with phase 2
+OAuth grants, which give each caller a real identity.
+
 ## Run it
 
 Locally it is part of `docker compose up` on port 8303. Write your profile:
