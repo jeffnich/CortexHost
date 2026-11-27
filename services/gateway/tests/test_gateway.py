@@ -227,3 +227,8 @@ def test_http_round_trip_as_duet(live_gateway):
 
     listed = asyncio.run(owner(f"{base}/{SECRET}/mcp"))
     assert listed["requests"][0]["client"] == "duet"
+
+
+def test_owner_name_does_not_dominate_ranking():
+    p = Profile("## Start here\nJeff's gateway.\n\n## Queue for Jeff\nJeff reviews it.\n\n## Who Jeff is\nA product leader.")
+    assert p.answer("who is jeff")[0]["title"] == "Who Jeff is"

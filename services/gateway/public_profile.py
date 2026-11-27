@@ -6,13 +6,14 @@ question. No embeddings, no model, no corpus access: what isn't in this file
 cannot leak through the public tier.
 """
 
+import math
 import re
 
 _WORD = re.compile(r"[a-z0-9][a-z0-9+#.-]*")
 _STOP = frozenset(
     "a an and are as at be but by can could did do does for from has have he her his how i if in "
     "into is it its me my of on or our she so that the their them they this to was we what when "
-    "where which who why will with would you your about tell know any some".split()
+    "where which why will with would you your about tell know any some".split()
 )
 
 
@@ -59,10 +60,13 @@ class Profile:
     def answer(self, question: str, k: int = 3) -> list[dict]:
         """Top-k sections for the question. Falls back to the first section."""
         q = _tokens(question or "")
+        n = len(self.sections)
+        # Rare words carry the signal: the owner's name appears everywhere and
+        # should not decide the answer. Title hits count double.
+        idf = {t: math.log(1 + n / (1 + sum(t in s["_tokens"] for s in self.sections))) for t in q}
         scored = []
         for i, s in enumerate(self.sections):
-            # Title hits count double: "projects" should land on "## Projects".
-            score = len(q & s["_tokens"]) + len(q & s["_title"])
+            score = sum(idf[t] for t in q & s["_tokens"]) + sum(idf[t] for t in q & s["_title"])
             if score:
                 scored.append((score, -i, s))
         scored.sort(reverse=True)
