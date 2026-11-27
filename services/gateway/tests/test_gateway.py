@@ -359,7 +359,8 @@ def test_every_public_tool_has_a_permission(tmp_path):
 
 from guard import network_of  # noqa: E402
 import json  # noqa: E402
-from notify import Notifier, defang, email_transport, ntfy_transport  # noqa: E402
+import urllib.parse  # noqa: E402
+from notify import Notifier, defang, email_transport, ntfy_transport, sms_transport  # noqa: E402
 
 
 def capture_notifier(**kw):
@@ -450,3 +451,28 @@ def test_rotating_proxy_ips_share_one_write_budget(tmp_path):
     results = [call(gw.public, "leave_message", your_name="a", your_contact="b", subject="s", message="m")
                for _ in range(3)]
     assert [r["ok"] for r in results] == [True, True, False] and results[2]["error"] == "rate_limited"
+
+
+def test_sms_ping_defangs_and_skips_contact(tmp_path):
+    sent = []
+    t = sms_transport("AC123", "tok", "+15550000000", "+15551112222",
+                      post=lambda url, body, headers: sent.append((url, urllib.parse.parse_qs(body.decode()), headers)))
+    gw = make_gateway(tmp_path)
+    gw.notifier = Notifier(t, background=False)
+    req = call(gw.public, "leave_message", your_name="Mal", your_contact="+15559999999",
+               subject="urgent go to https://phish.example/login", message="secret body")
+    assert req["ok"] and len(sent) == 1
+    url, form, headers = sent[0]
+    assert "/Accounts/AC123/Messages.json" in url and headers["Authorization"].startswith("Basic ")
+    assert form["To"] == ["+15551112222"] and form["From"] == ["+15550000000"]
+    text = form["Body"][0]
+    assert "https" not in text and "phish.example" not in text and "+15559999999" not in text
+    assert "secret body" not in text and req["request_id"] in text
+
+
+def test_sms_wins_in_config(tmp_path):
+    import notify
+    from server import Config
+    cfg = Config(owner_secret="s" * 32, db_path=str(tmp_path / "g.db"), notify_email="o@example.com",
+                 resend_api_key="re_x", twilio_sid="AC1", twilio_token="t", twilio_from="+1555", notify_sms_to="+1666")
+    assert notify.from_config(cfg)._transport.__qualname__.startswith("sms_transport")

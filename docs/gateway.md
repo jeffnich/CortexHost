@@ -66,9 +66,13 @@ either. Avoid the "secret address", which carries full event details.
 ## Instant pings
 
 Every new meeting request or message pings the owner with
-"name: subject · request id". Pick one channel:
+"name: subject · request id". Pick one channel (first configured wins):
 
-- **Email (recommended).** Set `GATEWAY_NOTIFY_EMAIL` and
+- **SMS.** Set `GATEWAY_NOTIFY_SMS_TO` (your phone, E.164), plus
+  `GATEWAY_TWILIO_SID`, `GATEWAY_TWILIO_TOKEN` and `GATEWAY_TWILIO_FROM`.
+  US numbers need carrier registration (toll-free verification) before
+  texts deliver, so allow a few business days.
+- **Email.** Set `GATEWAY_NOTIFY_EMAIL` and
   `GATEWAY_RESEND_API_KEY`. One Resend API call sends a plain-text email
   (no HTML part) to your inbox, so the ping lands in the mail app you
   already have. The default sender `onboarding@resend.dev` needs no domain
@@ -78,7 +82,7 @@ Every new meeting request or message pings the owner with
 - **ntfy.** Set `GATEWAY_NTFY_URL` to `https://ntfy.sh/<long random topic>`
   and subscribe to it in the ntfy app. The topic name is the secret.
 
-Email wins if both are set. Visitor text only goes in the body, as plain
+Visitor text only goes in the body, as plain
 text, with links neutered and length capped. Contact details and message
 bodies are never sent. After `GATEWAY_PINGS_PER_HOUR` (default 10) pings in
 an hour you get one "paused" notice, then nothing until the hour rolls over.

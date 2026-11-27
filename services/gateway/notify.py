@@ -1,6 +1,7 @@
 """Instant ping to the owner when a request lands in the queue.
 
-Two channels, pick one with env vars:
+Channels, pick one with env vars (first configured wins: SMS, email, ntfy):
+- SMS: Twilio, to the owner's phone number.
 - email (default recommendation): one Resend API call to the owner's own
   inbox, so the ping shows up in the mail app already on their phone.
   Plain-text only, no HTML, so nothing in it can render as a link.
@@ -16,7 +17,9 @@ import re
 import sys
 import threading
 import time
+import base64
 import json
+import urllib.parse
 import urllib.request
 
 from guard import RateLimiter, clean_text
@@ -61,6 +64,20 @@ def email_transport(api_key: str, to: str, sender: str = DEFAULT_FROM, post=_pos
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                    "User-Agent": "cortex-gateway"}
         post(RESEND_URL, json.dumps(payload).encode("utf-8"), headers)
+    return send
+
+
+def sms_transport(account_sid: str, auth_token: str, from_number: str, to_number: str, post=_post):
+    """Twilio SMS. Plain text; phones may still auto-link anything URL-shaped,
+    which is why visitor text is defanged before it gets here."""
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{urllib.parse.quote(account_sid)}/Messages.json"
+    auth = base64.b64encode(f"{account_sid}:{auth_token}".encode()).decode()
+
+    def send(title: str, body: str, priority: str, ref: str) -> None:
+        text = f"{title}\n{body}"[:600]
+        form = urllib.parse.urlencode({"To": to_number, "From": from_number, "Body": text}).encode()
+        headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/x-www-form-urlencoded"}
+        post(url, form, headers)
     return send
 
 
@@ -112,7 +129,9 @@ class Notifier:
 
 
 def from_config(cfg) -> "Notifier | None":
-    if cfg.resend_api_key and cfg.notify_email:
+    if cfg.twilio_sid and cfg.twilio_token and cfg.twilio_from and cfg.notify_sms_to:
+        t = sms_transport(cfg.twilio_sid, cfg.twilio_token, cfg.twilio_from, cfg.notify_sms_to)
+    elif cfg.resend_api_key and cfg.notify_email:
         t = email_transport(cfg.resend_api_key, cfg.notify_email, cfg.notify_from or DEFAULT_FROM)
     elif cfg.ntfy_url:
         t = ntfy_transport(cfg.ntfy_url, cfg.ntfy_token)

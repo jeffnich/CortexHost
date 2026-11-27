@@ -40,6 +40,8 @@ Env:
   CORTEX_TZ                owner's time zone for availability (default UTC)
   GATEWAY_WORK_HOURS       e.g. 09:00-17:00 (default)
   GATEWAY_WORK_DAYS        e.g. mon-fri (default)
+  GATEWAY_NOTIFY_SMS_TO    owner's phone (E.164) for SMS pings, with GATEWAY_TWILIO_SID,
+                           GATEWAY_TWILIO_TOKEN and GATEWAY_TWILIO_FROM. Wins over email/ntfy.
   GATEWAY_NOTIFY_EMAIL     owner's inbox for instant pings on new requests (with
                            GATEWAY_RESEND_API_KEY). Wins over ntfy if both are set.
   GATEWAY_RESEND_API_KEY   Resend API key used to send those emails
@@ -123,6 +125,10 @@ class Config:
     ntfy_url: str = ""
     ntfy_token: str = ""
     notify_email: str = ""
+    notify_sms_to: str = ""
+    twilio_sid: str = ""
+    twilio_token: str = ""
+    twilio_from: str = ""
     resend_api_key: str = ""
     notify_from: str = ""
     pings_per_hour: int = 10
@@ -157,6 +163,10 @@ class Config:
             ntfy_url=e.get("GATEWAY_NTFY_URL", "").strip(),
             ntfy_token=e.get("GATEWAY_NTFY_TOKEN", "").strip(),
             notify_email=e.get("GATEWAY_NOTIFY_EMAIL", "").strip(),
+            notify_sms_to=e.get("GATEWAY_NOTIFY_SMS_TO", "").strip(),
+            twilio_sid=e.get("GATEWAY_TWILIO_SID", "").strip(),
+            twilio_token=e.get("GATEWAY_TWILIO_TOKEN", "").strip(),
+            twilio_from=e.get("GATEWAY_TWILIO_FROM", "").strip(),
             resend_api_key=e.get("GATEWAY_RESEND_API_KEY", "").strip(),
             notify_from=e.get("GATEWAY_NOTIFY_FROM", "").strip(),
             pings_per_hour=int(e.get("GATEWAY_PINGS_PER_HOUR", 10)),
