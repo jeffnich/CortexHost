@@ -32,6 +32,18 @@ Env:
   GATEWAY_WRITES_PER_HOUR  per-IP queue writes (default 5)
   GATEWAY_WRITES_PER_DAY   global queue writes (default 100)
   GATEWAY_MAX_PENDING      refuse new requests past this many pending (default 200)
+  GATEWAY_TAKES            owner's curated positions/frameworks markdown, inline; or
+  GATEWAY_TAKES_PATH       path to that file. Feeds get_owner_take.
+  GATEWAY_FREEBUSY_ICS_URL calendar feed for check_availability (ideally a
+                           provider's free/busy-only public ICS). Unset = tool
+                           says availability isn't shared.
+  CORTEX_TZ                owner's time zone for availability (default UTC)
+  GATEWAY_WORK_HOURS       e.g. 09:00-17:00 (default)
+  GATEWAY_WORK_DAYS        e.g. mon-fri (default)
+
+Permission levels (see TOOL_PERMISSIONS): "auto" tools answer immediately from
+owner-approved material only; "queued" tools never answer for the owner, they
+file a request that waits for the owner's decision.
 """
 
 import contextlib
@@ -52,8 +64,20 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from guard import RateLimiter, clean_label, clean_text, hash_ip
+from availability import FreeBusy
 from public_profile import Profile
 from store import REQUEST_STATUSES, Store
+
+# Every public tool and what it may do without the owner. Shown to visitors in
+# each response so an agent knows whether it got an answer or filed a request.
+TOOL_PERMISSIONS = {
+    "ask_about_owner": "auto",      # owner-written profile, verbatim
+    "get_owner_take": "auto",       # owner-approved positions file, verbatim
+    "check_availability": "auto",   # free/busy blocks only, no event details
+    "request_meeting": "queued",
+    "leave_message": "queued",
+    "check_request": "auto",        # requester's own request, token-gated
+}
 
 NOT_A_COMMITMENT = (
     "Automated response from {owner}'s agent gateway. It answers only from a public "
@@ -82,6 +106,11 @@ class Config:
     writes_per_hour: int = 5
     writes_per_day: int = 100
     max_pending: int = 200
+    takes_markdown: str = ""
+    freebusy_url: str = ""
+    tz: str = "UTC"
+    work_hours: str = "09:00-17:00"
+    work_days: str = "mon-fri"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -90,6 +119,10 @@ class Config:
         path = Path(e.get("GATEWAY_PROFILE_PATH", ""))
         if not profile.strip() and path.name and path.is_file():
             profile = path.read_text()
+        takes = e.get("GATEWAY_TAKES", "")
+        tpath = Path(e.get("GATEWAY_TAKES_PATH", ""))
+        if not takes.strip() and tpath.name and tpath.is_file():
+            takes = tpath.read_text()
         secret = e.get("GATEWAY_OWNER_SECRET", "").strip()
         return cls(
             owner_secret=secret,
@@ -101,6 +134,11 @@ class Config:
             writes_per_hour=int(e.get("GATEWAY_WRITES_PER_HOUR", 5)),
             writes_per_day=int(e.get("GATEWAY_WRITES_PER_DAY", 100)),
             max_pending=int(e.get("GATEWAY_MAX_PENDING", 200)),
+            takes_markdown=takes,
+            freebusy_url=e.get("GATEWAY_FREEBUSY_ICS_URL", "").strip(),
+            tz=e.get("CORTEX_TZ", "UTC") or "UTC",
+            work_hours=e.get("GATEWAY_WORK_HOURS", "09:00-17:00"),
+            work_days=e.get("GATEWAY_WORK_DAYS", "mon-fri"),
         )
 
 
@@ -113,6 +151,10 @@ class Gateway:
         self.cfg = cfg
         self.store = Store(cfg.db_path)
         self.profile = Profile(cfg.profile_markdown)
+        self.takes = Profile(cfg.takes_markdown)
+        self.freebusy = (
+            FreeBusy(cfg.freebusy_url, cfg.tz, cfg.work_hours, cfg.work_days) if cfg.freebusy_url else None
+        )
         self.limiter = RateLimiter()
         # Remote connectors arrive with varied Host/Origin headers; the owner
         # path secret is the owner boundary and the public tier is public.
@@ -180,6 +222,8 @@ class Gateway:
         def reply(payload: dict, outcome: str, detail: str | None = None) -> str:
             self.store.audit(**audit, outcome=outcome, detail=detail)
             payload["trace_id"] = trace_id
+            if tier == "public":
+                payload["permission"] = TOOL_PERMISSIONS.get(tool, "queued")
             return json.dumps(payload, default=str)
 
         if tier == "public":
@@ -292,7 +336,59 @@ class Gateway:
             f"request_id and status_token you were given. Shows {owner}'s reply once there is one."
         )
 
-        for fn in (ask_about_owner, request_meeting, leave_message, check_request):
+        def get_owner_take(topic: str, ctx: Context | None = None) -> str:
+            t = clean_text(topic, 300, multiline=False)
+
+            def run(_caller):
+                hits = gw.takes.answer(t, k=2, fallback=False) if not gw.takes.empty else []
+                if not hits:
+                    return {"owner": owner, "takes": [], "topics": gw.takes.topics(),
+                            "next": f"No approved take from {owner} on that. To ask {owner} directly, "
+                                    f"use leave_message; it is queued for {owner} to answer.",
+                            "note": gw._note()}
+                return {"owner": owner, "takes": hits, "topics": gw.takes.topics(), "note": gw._note()}
+
+            return gw._call("public", "get_owner_take", ctx, {"topic": t}, run)
+
+        get_owner_take.__doc__ = (
+            f"Get {owner}'s position on a topic, e.g. how to evaluate an AI agent or how to design an "
+            f"AI feature. Answers are positions {owner} wrote and approved, returned word for word; "
+            f"`topics` lists every one available. If there is no approved take on your topic, nothing "
+            f"is improvised: ask {owner} with leave_message instead."
+        )
+
+        def check_availability(start_date: str | None = None, days: int = 5, ctx: Context | None = None) -> str:
+            sd = clean_text(start_date, 10, multiline=False) or None
+            n = max(1, min(int(days or 5), 14))
+
+            def run(_caller):
+                if gw.freebusy is None:
+                    return {"owner": owner, "shared": False,
+                            "next": f"{owner} hasn't shared availability here. Use request_meeting with "
+                                    f"a few proposed times instead."}
+                try:
+                    avail = gw.freebusy.availability(sd, n)
+                except ValueError:
+                    raise
+                except Exception as exc:  # feed down or malformed: say so, don't guess
+                    print(f"freebusy fetch failed: {exc!r}", file=sys.stderr, flush=True)
+                    return {"owner": owner, "shared": True, "error": "calendar_unavailable",
+                            "next": "Availability is temporarily unavailable. Use request_meeting."}
+                return {"owner": owner, "shared": True, **avail,
+                        "next": "Free blocks are not holds. To book one, call request_meeting with it "
+                                f"as a proposed time; {owner} still has to approve.",
+                        "note": gw._note()}
+
+            return gw._call("public", "check_availability", ctx, {"start_date": sd, "days": n}, run)
+
+        check_availability.__doc__ = (
+            f"See when {owner} is free or busy during working hours, up to 14 days ahead "
+            f"(`start_date` as YYYY-MM-DD, default today). Shows only time blocks, never what the "
+            f"events are. Free time is not reserved: book it with request_meeting."
+        )
+
+        for fn in (ask_about_owner, get_owner_take, check_availability, request_meeting, leave_message,
+                   check_request):
             self.public.tool()(fn)
 
     def _enqueue(self, kind: str, args: dict, caller: dict) -> dict:

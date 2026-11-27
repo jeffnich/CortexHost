@@ -10,6 +10,7 @@ import socket
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from guard import RateLimiter, clean_text  # noqa: E402
 from public_profile import Profile  # noqa: E402
-from server import Config, Gateway  # noqa: E402
+from availability import FreeBusy  # noqa: E402
+from server import TOOL_PERMISSIONS, Config, Gateway  # noqa: E402
 
 SECRET = "owner-secret-for-tests-0123456789"
 PROFILE = (Path(__file__).resolve().parents[1] / "profile.example.md").read_text()
@@ -45,13 +47,14 @@ def tool_names(server) -> set[str]:
 
 def test_public_tier_exposes_only_public_tools(tmp_path):
     gw = make_gateway(tmp_path)
-    assert tool_names(gw.public) == {"ask_about_owner", "request_meeting", "leave_message", "check_request"}
+    assert tool_names(gw.public) == {"ask_about_owner", "get_owner_take", "check_availability",
+                                     "request_meeting", "leave_message", "check_request"}
     assert tool_names(gw.owner) == {"list_requests", "resolve_request", "gateway_activity", "preview_public_profile"}
 
 
 def test_gateway_module_has_no_corpus_access():
     src = "".join((Path(__file__).resolve().parents[1] / f).read_text()
-                  for f in ("server.py", "store.py", "guard.py", "public_profile.py"))
+                  for f in ("server.py", "store.py", "guard.py", "public_profile.py", "availability.py"))
     for forbidden in ("QDRANT_URL", "QDRANT_API_KEY", "OPENAI_API_KEY", "import requests",
                       "from openai", "search_memory("):
         assert forbidden not in src, forbidden
@@ -232,3 +235,121 @@ def test_http_round_trip_as_duet(live_gateway):
 def test_owner_name_does_not_dominate_ranking():
     p = Profile("## Start here\nJeff's gateway.\n\n## Queue for Jeff\nJeff reviews it.\n\n## Who Jeff is\nA product leader.")
     assert p.answer("who is jeff")[0]["title"] == "Who Jeff is"
+
+
+# ---- get_owner_take -----------------------------------------------------------
+
+TAKES = """# Takes
+<!-- private drafting note -->
+## Evaluating AI agents
+Judge an agent on real tasks with a rubric, not on a demo.
+
+## Designing AI features
+Start from user intent, then decide where the model sits.
+"""
+
+
+def test_owner_take_matches_and_never_improvises(tmp_path):
+    gw = make_gateway(tmp_path, takes_markdown=TAKES)
+    out = call(gw.public, "get_owner_take", topic="how should we evaluate our support agent?")
+    assert out["ok"] and out["permission"] == "auto"
+    assert out["takes"][0]["title"] == "Evaluating AI agents"
+    assert out["takes"][0]["text"] in TAKES and "private" not in json.dumps(out)
+
+    out = call(gw.public, "get_owner_take", topic="favorite pizza topping")
+    assert out["ok"] and out["takes"] == [] and "leave_message" in out["next"]
+
+
+def test_owner_take_without_file(tmp_path):
+    gw = make_gateway(tmp_path)
+    out = call(gw.public, "get_owner_take", topic="agents")
+    assert out["takes"] == [] and out["topics"] == []
+
+
+# ---- check_availability -------------------------------------------------------
+
+ICS = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:1
+SUMMARY:Secret board meeting about layoffs
+LOCATION:Room 42
+DESCRIPTION:confidential
+DTSTART:20261201T170000Z
+DTEND:20261201T180000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:2
+SUMMARY:Daily standup
+DTSTART:20261201T160000Z
+DTEND:20261201T161500Z
+RRULE:FREQ=DAILY;COUNT=5
+END:VEVENT
+BEGIN:VEVENT
+UID:3
+SUMMARY:Reminder (free)
+TRANSP:TRANSPARENT
+DTSTART:20261202T190000Z
+DTEND:20261202T200000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:4
+SUMMARY:Offsite
+DTSTART;VALUE=DATE:20261203
+DTEND;VALUE=DATE:20261204
+END:VEVENT
+END:VCALENDAR
+"""
+
+FIXED_NOW = datetime(2026, 11, 30, 12, 0, tzinfo=timezone.utc)  # Monday
+
+
+def freebusy(**kw):
+    return FreeBusy("https://example.invalid/cal.ics", tz="America/Denver", fetch=lambda _u: ICS,
+                    now=lambda: FIXED_NOW, **kw)
+
+
+def test_availability_blocks_only():
+    av = freebusy().availability("2026-12-01", 3)
+    assert av["timezone"] == "America/Denver" and av["working_hours"] == "09:00-17:00"
+    by_day = {d["date"]: d for d in av["days"]}
+    tue = by_day["2026-12-01"]
+    # Standup 09:00-09:15 MST and the 10:00-11:00 meeting are busy.
+    assert tue["busy"] == [{"start": "2026-12-01T09:00-07:00", "end": "2026-12-01T09:15-07:00"},
+                           {"start": "2026-12-01T10:00-07:00", "end": "2026-12-01T11:00-07:00"}]
+    assert tue["free"][0]["start"] == "2026-12-01T09:15-07:00"
+    # Transparent event on Wednesday doesn't block; only the standup recurrence does.
+    assert len(by_day["2026-12-02"]["busy"]) == 1
+    # All-day offsite blocks Thursday entirely.
+    assert by_day["2026-12-03"]["free"] == []
+    blob = json.dumps(av)
+    for leak in ("Secret", "layoffs", "Room 42", "confidential", "standup", "Offsite"):
+        assert leak not in blob
+
+
+def test_availability_skips_weekends_and_caps_range():
+    av = freebusy().availability("2026-12-04", 30)
+    dates = [d["date"] for d in av["days"]]
+    assert "2026-12-05" not in dates and "2026-12-06" not in dates  # Sat, Sun
+    assert len(dates) <= 10  # 14-day cap, weekdays only
+
+
+def test_availability_tool_wiring(tmp_path):
+    gw = make_gateway(tmp_path)
+    out = call(gw.public, "check_availability")
+    assert out["ok"] and out["shared"] is False and out["permission"] == "auto"
+
+    gw.freebusy = freebusy()
+    out = call(gw.public, "check_availability", start_date="2026-12-01", days=2)
+    assert out["shared"] and out["days"] and "request_meeting" in out["next"]
+
+    gw.freebusy = FreeBusy("https://x.invalid", fetch=lambda _u: (_ for _ in ()).throw(OSError("down")))
+    out = call(gw.public, "check_availability")
+    assert out["error"] == "calendar_unavailable"
+
+
+def test_every_public_tool_has_a_permission(tmp_path):
+    gw = make_gateway(tmp_path)
+    assert tool_names(gw.public) == set(TOOL_PERMISSIONS)
+    assert TOOL_PERMISSIONS["request_meeting"] == "queued" and TOOL_PERMISSIONS["leave_message"] == "queued"
