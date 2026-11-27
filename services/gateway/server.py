@@ -38,6 +38,7 @@ import contextlib
 import hashlib
 import json
 import os
+import socket
 import sys
 import uuid
 from dataclasses import dataclass
@@ -405,12 +406,29 @@ def main() -> None:
         sys.exit(1)
     if gw.profile.empty:
         print("warning: no public profile set (GATEWAY_PROFILE / GATEWAY_PROFILE_PATH)", file=sys.stderr)
-    # Railway's edge and private network are IPv6; bind dual-stack wildcard.
-    uvicorn.run(
-        gw.app(),
-        host=os.environ.get("GATEWAY_BIND_HOST", "::"),
-        port=int(os.environ.get("PORT", "8080")),
-    )
+    host = os.environ.get("GATEWAY_BIND_HOST", "::")
+    port = int(os.environ.get("PORT", "8080"))
+    server = uvicorn.Server(uvicorn.Config(gw.app(), host=host, port=port))
+    if host == "::":
+        server.run(sockets=[_dual_stack_socket(port)])
+    else:
+        server.run()
+
+
+def _dual_stack_socket(port: int) -> socket.socket:
+    """Railway's edge reaches us over IPv6 but its healthcheck over IPv4, and
+    asyncio marks "::" sockets IPv6-only. Bind one socket that takes both,
+    falling back to IPv4 where the host has no IPv6 at all."""
+    try:
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        addr = ("::", port)
+    except OSError:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        addr = ("0.0.0.0", port)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(addr)
+    return sock
 
 
 if __name__ == "__main__":
