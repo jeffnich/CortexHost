@@ -68,3 +68,5 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
 - `CORTEX_EXCLUDE` and `OBSIDIAN_INCLUDE` implement the user's privacy
   boundary (two-zone capture). Never widen them without being asked.
 - `MAP_PASSWORD` gates the full map; leave the demo/full split intact.
+- The `gateway` service must never get `QDRANT_*` or `OPENAI_API_KEY`. Its
+  public tier is safe only because it cannot reach the corpus (docs/gateway.md).

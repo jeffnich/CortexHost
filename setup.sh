@@ -24,9 +24,13 @@ PY
 }
 
 echo "filling blank secrets..."
-for k in QDRANT_API_KEY CORTEX_MCP_PATH_SECRET BRIEF_PATH_SECRET MAP_PATH_SECRET DEMO_PATH_SECRET; do
+for k in QDRANT_API_KEY CORTEX_MCP_PATH_SECRET BRIEF_PATH_SECRET MAP_PATH_SECRET DEMO_PATH_SECRET GATEWAY_OWNER_SECRET; do
   fill "$k" "$(gen)"
 done
+
+# The gateway's public profile is yours to write; start from the example.
+# (Created before compose runs so Docker mounts a file, not an empty dir.)
+[ -f gateway-profile.md ] || cp services/gateway/profile.example.md gateway-profile.md
 
 if grep -qE "^OPENAI_API_KEY=$" .env; then
   if [ -t 0 ]; then

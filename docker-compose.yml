@@ -74,5 +74,23 @@ services:
     ports:
       - "${BIND_HOST:-127.0.0.1}:${MAP_PORT:-8302}:8080"
 
+  # Public front door for other people's agents. Deliberately gets NO Qdrant or
+  # OpenAI credentials: it can only see the public profile and its own queue.
+  gateway:
+    build: ./services/gateway
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - GATEWAY_BIND_HOST=0.0.0.0
+      - GATEWAY_OWNER_SECRET=${GATEWAY_OWNER_SECRET}
+      - CORTEX_USER_NAME=${CORTEX_USER_NAME}
+      - GATEWAY_PROFILE_PATH=${GATEWAY_PROFILE_PATH:-/app/profile.example.md}
+    volumes:
+      - gateway_data:/data
+      - ./gateway-profile.md:/app/gateway-profile.md:ro
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${GATEWAY_PORT:-8303}:8080"
+
 volumes:
   qdrant_data:
+  gateway_data:

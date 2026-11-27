@@ -33,5 +33,7 @@ esac
 probe "brief   " "http://localhost:$BP/$BRS/brief.html" yes
 probe "map     " "http://localhost:$MAPP/$MAPS/map.html" yes
 probe "demo    " "http://localhost:$MAPP/$DEMOS/demo.html" yes
+GWP=$(get GATEWAY_PORT); GWP=${GWP:-8303}
+probe "gateway " "http://localhost:$GWP/healthz"
 
 exit $fail

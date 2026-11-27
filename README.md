@@ -44,6 +44,10 @@ them back through MCP to whatever AI you already use.
   full map.
 
   <img src="docs/assets/login.png" width="420" alt="The passphrase gate between the shareable demo and the full map">
+- **Agent gateway** — a public MCP endpoint other people's agents can talk
+  to. Visitors can ask about you (answered only from a public profile you
+  write) and leave meeting requests or messages in a queue you approve.
+  It holds no memory credentials at all. See [docs/gateway.md](docs/gateway.md).
 
 ## Install with an AI agent (recommended)
 
@@ -104,6 +108,9 @@ See [docs/capture-setup.md](docs/capture-setup.md) for ongoing auto-capture
 - **Capability URLs.** Every service hides behind an unguessable path secret.
   The demo map lives on its own secret so sharing it never exposes the full
   map's URL, and the full map can additionally be password-gated.
+- **The agent gateway can't see your memory.** It runs with no Qdrant or
+  OpenAI credentials, so visitors' agents only ever reach the profile you
+  wrote and a request queue.
 - **Raw text never leaves the substrate un-redacted.** The shareable demo
   strips personal memory text from the page entirely (server-side), not
   hidden client-side.
