@@ -57,8 +57,8 @@ class Profile:
     def topics(self) -> list[str]:
         return [s["title"] for s in self.sections]
 
-    def answer(self, question: str, k: int = 3) -> list[dict]:
-        """Top-k sections for the question. Falls back to the first section."""
+    def answer(self, question: str, k: int = 3, fallback: bool = True) -> list[dict]:
+        """Top-k sections for the question. With `fallback`, no match returns the first section."""
         q = _tokens(question or "")
         n = len(self.sections)
         # Rare words carry the signal: the owner's name appears everywhere and
@@ -70,5 +70,5 @@ class Profile:
             if score:
                 scored.append((score, -i, s))
         scored.sort(reverse=True)
-        picked = [s for _, _, s in scored[:k]] or self.sections[:1]
+        picked = [s for _, _, s in scored[:k]] or (self.sections[:1] if fallback else [])
         return [{"title": s["title"], "text": s["text"]} for s in picked]

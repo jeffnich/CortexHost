@@ -1,2 +1,4 @@
 mcp>=1.9,<2  # 2.x renamed FastMCP -> MCPServer; unpinned builds break
 uvicorn>=0.30
+icalendar>=6
+recurring-ical-events>=3

@@ -49,6 +49,18 @@ CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 
 REQUEST_STATUSES = ("pending", "approved", "declined", "done")
 
+# What the triage agent may say about a request. It records an opinion and a
+# draft; it cannot change status or send anything to the requester.
+TRIAGE_VERDICTS = ("escalate", "digest", "suggest_decline", "noise")
+TRIAGE_COLUMNS = (
+    ("triage_verdict", "TEXT"),
+    ("triage_priority", "INTEGER"),
+    ("triage_summary", "TEXT"),
+    ("triage_draft", "TEXT"),
+    ("triage_rationale", "TEXT"),
+    ("triaged_at", "TEXT"),
+)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -68,6 +80,10 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(requests)")}
+            for col, typ in TRIAGE_COLUMNS:  # additive migration for existing volumes
+                if col not in have:
+                    self._db.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
 
     # ---- request queue -----------------------------------------------------
 
@@ -115,12 +131,18 @@ class Store:
             "updated_at": row["updated_at"],
         }
 
-    def list_requests(self, status: str | None = "pending", limit: int = 25) -> list[dict]:
+    def list_requests(
+        self, status: str | None = "pending", limit: int = 25, untriaged_only: bool = False
+    ) -> list[dict]:
         sql = "SELECT * FROM requests"
-        args: list = []
+        where, args = [], []
         if status:
-            sql += " WHERE status = ?"
+            where.append("status = ?")
             args.append(status)
+        if untriaged_only:
+            where.append("triaged_at IS NULL")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC LIMIT ?"
         args.append(max(1, min(int(limit), 200)))
         with self._lock:
@@ -134,6 +156,22 @@ class Store:
             cur = self._db.execute(
                 "UPDATE requests SET status = ?, reply = ?, updated_at = ? WHERE id = ?",
                 (status, reply, _now(), request_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = self._db.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+        return self._owner_view(row)
+
+    def record_triage(
+        self, request_id: str, *, verdict: str, priority: int, summary: str, draft: str | None, rationale: str
+    ) -> dict | None:
+        if verdict not in TRIAGE_VERDICTS:
+            raise ValueError(f"verdict must be one of {TRIAGE_VERDICTS}")
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE requests SET triage_verdict = ?, triage_priority = ?, triage_summary = ?, "
+                "triage_draft = ?, triage_rationale = ?, triaged_at = ? WHERE id = ?",
+                (verdict, max(1, min(int(priority), 3)), summary, draft, rationale, _now(), request_id),
             )
             if cur.rowcount == 0:
                 return None
@@ -162,6 +200,15 @@ class Store:
                 **json.loads(row["details_json"] or "{}"),
             },
             "reply": row["reply"],
+            # Written by the owner's own triage agent: an opinion, not a decision.
+            "triage": None if row["triaged_at"] is None else {
+                "verdict": row["triage_verdict"],
+                "priority": row["triage_priority"],
+                "summary": row["triage_summary"],
+                "draft_reply": row["triage_draft"],
+                "rationale": row["triage_rationale"],
+                "at": row["triaged_at"],
+            },
         }
 
     # ---- audit log ---------------------------------------------------------
