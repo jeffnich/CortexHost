@@ -250,6 +250,23 @@ def keygen() -> str:
     return b64url(seed)
 
 
+def load_or_create_key(path: str) -> str:
+    """Read the seed at `path`, or create it (mode 0600) on first boot. Keeping the key on
+    the service's volume means it never has to be copied anywhere to be set."""
+    import os
+    from pathlib import Path
+
+    p = Path(path)
+    if p.is_file():
+        return p.read_text().strip()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    seed = keygen()
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(seed + "\n")
+    return seed
+
+
 if __name__ == "__main__":  # pragma: no cover
     import sys
 

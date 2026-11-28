@@ -58,7 +58,10 @@ Env:
   GATEWAY_PUBLIC_URL       public origin, e.g. https://jeffnicholson.ai. Names this gateway
                            in its Agent Card and in every signed outbound request.
   GATEWAY_SIGNING_KEY      base64url Ed25519 seed (python identity.py keygen). Signs the
-                           Agent Card and outbound requests. Unset = unsigned card, no outbound.
+                           Agent Card and outbound requests. Optional: with GATEWAY_PUBLIC_URL set
+                           and no key, the gateway makes one on first boot and keeps it at
+                           GATEWAY_SIGNING_KEY_PATH (default /data/signing.key, on the volume), so
+                           the private key never has to leave the server. Neither = unsigned, no outbound.
   GATEWAY_OUTBOUND_POLICY  outbound policy YAML, inline; or
   GATEWAY_OUTBOUND_POLICY_PATH  path to it (see outbound_policy.example.yaml). Unset = outbound off.
 
@@ -95,7 +98,7 @@ from starlette.routing import Route
 from guard import RateLimiter, clean_label, clean_text, hash_ip, network_of
 from availability import FreeBusy
 import notify
-from identity import DIRECTORY_MEDIA_TYPE, DIRECTORY_PATH, JWKS_PATH, Identity
+from identity import DIRECTORY_MEDIA_TYPE, DIRECTORY_PATH, JWKS_PATH, Identity, load_or_create_key
 from outbound import (CARD_PATH, Outbound, Policy, PolicyError, card_digest, card_signer_kid,
                       parse_target, pick_a2a_interface, pick_mcp_interface)
 from public_profile import Profile
@@ -159,6 +162,7 @@ class Config:
     pings_per_hour: int = 10
     public_url: str = ""
     signing_key: str = ""
+    signing_key_path: str = ""
     outbound_policy: str = ""
 
     @classmethod
@@ -207,6 +211,7 @@ class Config:
             pings_per_hour=int(e.get("GATEWAY_PINGS_PER_HOUR", 10)),
             public_url=e.get("GATEWAY_PUBLIC_URL", "").strip().rstrip("/"),
             signing_key=e.get("GATEWAY_SIGNING_KEY", "").strip(),
+            signing_key_path=e.get("GATEWAY_SIGNING_KEY_PATH", "/data/signing.key").strip(),
             outbound_policy=policy,
         )
 
@@ -230,9 +235,10 @@ class Gateway:
         self.notifier = notify.from_config(cfg)
         self.waker = notify.waker_from_config(cfg)
         # Identity + outbound. No key means no signatures and no outbound at all.
-        self.identity = Identity.from_seed(cfg.signing_key, cfg.public_url) if cfg.signing_key else None
-        if self.identity and not cfg.public_url:
+        if cfg.signing_key and not cfg.public_url:
             raise ValueError("GATEWAY_SIGNING_KEY needs GATEWAY_PUBLIC_URL")
+        seed = cfg.signing_key or (load_or_create_key(cfg.signing_key_path) if cfg.public_url and cfg.signing_key_path else "")
+        self.identity = Identity.from_seed(seed, cfg.public_url) if seed else None
         self.policy = Policy.from_yaml(cfg.outbound_policy)
         self.outbound = Outbound(self.identity, self.policy) if self.identity else None
         # Remote connectors arrive with varied Host/Origin headers; the owner
