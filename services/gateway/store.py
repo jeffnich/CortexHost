@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS outbound_calls (
 CREATE INDEX IF NOT EXISTS outbound_ts ON outbound_calls(ts);
 CREATE INDEX IF NOT EXISTS outbound_host ON outbound_calls(target_host, ts);
 
+-- Owner-editable public documents (profile, takes). Every save is a new
+-- version; the latest wins over the env var. Nothing is ever overwritten,
+-- so the owner can see exactly what the public tier said and when.
+CREATE TABLE IF NOT EXISTS documents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,                  -- profile | takes
+    body        TEXT NOT NULL,
+    saved_at    TEXT NOT NULL,
+    saved_by    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS documents_name ON documents(name, id);
+
 -- Last key seen signing each target's card: a swap is flagged, not silent.
 CREATE TABLE IF NOT EXISTS agent_keys (
     target_host     TEXT PRIMARY KEY,
@@ -87,6 +99,9 @@ CREATE TABLE IF NOT EXISTS agent_keys (
 """
 
 GENESIS_HASH = "0" * 64
+DOCUMENT_NAMES = ("profile", "takes")
+_AUDIT_FIELDS = ("ts", "trace_id", "tier", "tool", "client", "ip_hash", "args_json", "outcome", "detail")
+AUDIT_CHAIN_COLUMNS = (("prev_hash", "TEXT"), ("row_hash", "TEXT"))
 _OUTBOUND_REQUEST_FIELDS = ("ts", "trace_id", "triggered_by", "tool", "target", "target_host",
                             "request_json", "policy_verdict")
 
@@ -127,6 +142,10 @@ class Store:
             for col, typ in TRIAGE_COLUMNS:  # additive migration for existing volumes
                 if col not in have:
                     self._db.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(audit)")}
+            for col, typ in AUDIT_CHAIN_COLUMNS:  # rows written before this stay unchained
+                if col not in have:
+                    self._db.execute(f"ALTER TABLE audit ADD COLUMN {col} {typ}")
 
     # ---- request queue -----------------------------------------------------
 
@@ -268,13 +287,70 @@ class Store:
         outcome: str,
         detail: str | None = None,
     ) -> None:
-        args_json = json.dumps(args or {}, default=str)[:2000]
+        fields = {
+            "ts": _now(), "trace_id": trace_id, "tier": tier, "tool": tool, "client": client,
+            "ip_hash": ip_hash, "args_json": json.dumps(args or {}, default=str)[:2000],
+            "outcome": outcome, "detail": (detail or "")[:500] or None,
+        }
         with self._lock:
+            last = self._db.execute(
+                "SELECT row_hash FROM audit WHERE row_hash IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+            prev = last["row_hash"] if last else GENESIS_HASH
             self._db.execute(
-                "INSERT INTO audit (ts, trace_id, tier, tool, client, ip_hash, args_json, outcome, detail)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (_now(), trace_id, tier, tool, client, ip_hash, args_json, outcome, (detail or "")[:500] or None),
+                "INSERT INTO audit (ts, trace_id, tier, tool, client, ip_hash, args_json, outcome, detail,"
+                " prev_hash, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*[fields[k] for k in _AUDIT_FIELDS], prev, self._audit_hash(prev, fields)),
             )
+
+    @staticmethod
+    def _audit_hash(prev: str, fields: dict) -> str:
+        blob = json.dumps({k: fields[k] for k in _AUDIT_FIELDS}, sort_keys=True)
+        return hashlib.sha256(f"{prev}\n{blob}".encode()).hexdigest()
+
+    def verify_audit_chain(self) -> dict:
+        """Walk the hash-chained audit rows. Rows from before chaining shipped are counted, not checked."""
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM audit ORDER BY id").fetchall()
+        prev, checked, legacy = GENESIS_HASH, 0, 0
+        for r in rows:
+            if r["row_hash"] is None:
+                legacy += 1
+                continue
+            if r["prev_hash"] != prev or r["row_hash"] != self._audit_hash(prev, dict(r)):
+                return {"intact": False, "checked": checked, "legacy_rows": legacy, "broken_at": r["id"]}
+            prev, checked = r["row_hash"], checked + 1
+        return {"intact": True, "checked": checked, "legacy_rows": legacy}
+
+    def audit_since(self, since_iso: str, limit: int = 2000) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, tier, tool, outcome FROM audit WHERE ts >= ? ORDER BY id DESC LIMIT ?",
+                (since_iso, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- owner documents ---------------------------------------------------
+
+    def save_document(self, name: str, body: str, saved_by: str) -> dict:
+        if name not in DOCUMENT_NAMES:
+            raise ValueError(f"document must be one of {DOCUMENT_NAMES}")
+        with self._lock:
+            cur = self._db.execute("INSERT INTO documents (name, body, saved_at, saved_by) VALUES (?, ?, ?, ?)",
+                                   (name, body, _now(), saved_by))
+            row = self._db.execute("SELECT * FROM documents WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+    def latest_document(self, name: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM documents WHERE name = ? ORDER BY id DESC LIMIT 1",
+                                   (name,)).fetchone()
+        return dict(row) if row else None
+
+    def document_history(self, name: str, limit: int = 20) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, name, saved_at, saved_by, length(body) AS chars FROM documents"
+                " WHERE name = ? ORDER BY id DESC LIMIT ?", (name, limit)).fetchall()
+        return [dict(r) for r in rows]
 
     # ---- outbound log ------------------------------------------------------
 
@@ -383,5 +459,7 @@ class Store:
         for r in rows:
             d = dict(r)
             d["args"] = json.loads(d.pop("args_json") or "{}")
+            d["chained"] = d.pop("row_hash", None) is not None
+            d.pop("prev_hash", None)
             out.append(d)
         return out

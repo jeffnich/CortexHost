@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+/* Chart roles. Light and dark are separate validated steps of the same hues. */
+:root {
+  color-scheme: light;
+  --surface: #ffffff;
+  --series-1: #257de0; /* inbound / read */
+  --series-2: #f47230; /* triage / write */
+  --series-3: #00b894; /* owner */
+  --series-4: #f2a600; /* outbound */
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface: #171717;
+    --series-1: #338ced;
+    --series-2: #e76624;
+    --series-3: #00a888;
+    --series-4: #d28e05;
+  }
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

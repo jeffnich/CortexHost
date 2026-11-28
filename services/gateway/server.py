@@ -103,6 +103,7 @@ from outbound import (CARD_PATH, Outbound, Policy, PolicyError, card_digest, car
                       parse_target, pick_a2a_interface, pick_mcp_interface)
 from public_profile import Profile
 from store import REQUEST_STATUSES, Store
+import dashboard
 
 # Every public tool and what it may do without the owner. Shown to visitors in
 # each response so an agent knows whether it got an answer or filed a request.
@@ -226,8 +227,12 @@ class Gateway:
             raise ValueError("GATEWAY_TRIAGE_SECRET must be 24+ chars and differ from the owner secret")
         self.cfg = cfg
         self.store = Store(cfg.db_path)
-        self.profile = Profile(cfg.profile_markdown)
-        self.takes = Profile(cfg.takes_markdown)
+        # A version saved from the dashboard wins over the env var.
+        self.doc_source = {}
+        for name, env_md in (("profile", cfg.profile_markdown), ("takes", cfg.takes_markdown)):
+            saved = self.store.latest_document(name)
+            self.set_document(name, saved["body"] if saved else env_md,
+                              f"dashboard v{saved['id']}" if saved else ("env" if env_md.strip() else "none"))
         self.freebusy = (
             FreeBusy(cfg.freebusy_url, cfg.tz, cfg.work_hours, cfg.work_days) if cfg.freebusy_url else None
         )
@@ -284,6 +289,10 @@ class Gateway:
         self._register_owner_tools()
         if self.triage:
             self._register_triage_tools()
+
+    def set_document(self, name: str, markdown: str, source: str) -> None:
+        setattr(self, name, Profile(markdown))
+        self.doc_source[name] = {"source": source, "markdown": markdown}
 
     # ---- caller identity + bookkeeping ---------------------------------------
 
@@ -851,7 +860,8 @@ class Gateway:
         well_known = [Route(CARD_PATH, card), Route(JWKS_PATH, jwks), Route(DIRECTORY_PATH, directory)]
 
         return Starlette(
-            routes=[Route("/healthz", healthz), *well_known, *public_app.routes, *owner_app.routes, *triage_routes],
+            routes=[Route("/healthz", healthz), *well_known, *dashboard.routes(self),
+                    *public_app.routes, *owner_app.routes, *triage_routes],
             lifespan=lifespan,
         )
 
