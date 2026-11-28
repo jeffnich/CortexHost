@@ -45,7 +45,50 @@ CREATE TABLE IF NOT EXISTS audit (
     detail      TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+
+-- Every call the owner's agent makes to someone else's agent. Written BEFORE
+-- the call goes out; if this insert fails, nothing is sent. Rows are
+-- hash-chained (row_hash covers the request fields and the previous row's
+-- row_hash; result_hash seals the reply onto its own row) so edits,
+-- deletions and reordering are detectable.
+CREATE TABLE IF NOT EXISTS outbound_calls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    triggered_by    TEXT NOT NULL,              -- owner | triage
+    tool            TEXT NOT NULL,              -- ask_agent
+    target          TEXT NOT NULL,
+    target_host     TEXT NOT NULL,
+    request_json    TEXT NOT NULL,              -- question + any MCP tool/args
+    policy_verdict  TEXT NOT NULL,              -- allowed | denied:<reason>
+    status          TEXT NOT NULL,              -- sending | ok | error | denied
+    protocol        TEXT,                       -- a2a-1.0 | a2a-0.3 | mcp
+    endpoint        TEXT,
+    card_digest     TEXT,
+    card_signature  TEXT,                       -- valid | invalid | unsigned | unverifiable
+    signer_kid      TEXT,
+    key_changed     INTEGER,
+    response_json   TEXT,
+    latency_ms      INTEGER,
+    prev_hash       TEXT NOT NULL,
+    row_hash        TEXT NOT NULL,
+    result_hash     TEXT
+);
+CREATE INDEX IF NOT EXISTS outbound_ts ON outbound_calls(ts);
+CREATE INDEX IF NOT EXISTS outbound_host ON outbound_calls(target_host, ts);
+
+-- Last key seen signing each target's card: a swap is flagged, not silent.
+CREATE TABLE IF NOT EXISTS agent_keys (
+    target_host     TEXT PRIMARY KEY,
+    signer_kid      TEXT NOT NULL,
+    first_seen      TEXT NOT NULL,
+    last_seen       TEXT NOT NULL
+);
 """
+
+GENESIS_HASH = "0" * 64
+_OUTBOUND_REQUEST_FIELDS = ("ts", "trace_id", "triggered_by", "tool", "target", "target_host",
+                            "request_json", "policy_verdict")
 
 REQUEST_STATUSES = ("pending", "approved", "declined", "done")
 
@@ -232,6 +275,99 @@ class Store:
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (_now(), trace_id, tier, tool, client, ip_hash, args_json, outcome, (detail or "")[:500] or None),
             )
+
+    # ---- outbound log ------------------------------------------------------
+
+    @staticmethod
+    def _chain(prev: str, fields: dict) -> str:
+        blob = json.dumps({k: fields[k] for k in _OUTBOUND_REQUEST_FIELDS}, sort_keys=True)
+        return hashlib.sha256(f"{prev}\n{blob}".encode()).hexdigest()
+
+    def log_outbound(self, *, trace_id: str, triggered_by: str, tool: str, target: str, target_host: str,
+                     request: dict, policy_verdict: str) -> int:
+        """Write the row for a call about to go out (or one refused by policy). Returns its id."""
+        fields = {
+            "ts": _now(), "trace_id": trace_id, "triggered_by": triggered_by, "tool": tool,
+            "target": target[:500], "target_host": target_host[:255],
+            "request_json": json.dumps(request, default=str)[:4000], "policy_verdict": policy_verdict[:200],
+        }
+        status = "sending" if policy_verdict == "allowed" else "denied"
+        with self._lock:
+            last = self._db.execute("SELECT row_hash FROM outbound_calls ORDER BY id DESC LIMIT 1").fetchone()
+            prev = last["row_hash"] if last else GENESIS_HASH
+            cur = self._db.execute(
+                "INSERT INTO outbound_calls (ts, trace_id, triggered_by, tool, target, target_host, request_json,"
+                " policy_verdict, status, prev_hash, row_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*[fields[k] for k in _OUTBOUND_REQUEST_FIELDS], status, prev, self._chain(prev, fields)),
+            )
+            return cur.lastrowid
+
+    def finish_outbound(self, row_id: int, *, status: str, response: dict, latency_ms: int,
+                        protocol: str | None = None, endpoint: str | None = None, card_digest: str | None = None,
+                        card_signature: str | None = None, signer_kid: str | None = None,
+                        key_changed: bool = False) -> None:
+        response_json = json.dumps(response, default=str)[:12000]
+        with self._lock:
+            row = self._db.execute("SELECT row_hash FROM outbound_calls WHERE id = ?", (row_id,)).fetchone()
+            seal = hashlib.sha256(f"{row['row_hash']}\n{status}\n{response_json}".encode()).hexdigest()
+            self._db.execute(
+                "UPDATE outbound_calls SET status = ?, protocol = ?, endpoint = ?, card_digest = ?, card_signature = ?,"
+                " signer_kid = ?, key_changed = ?, response_json = ?, latency_ms = ?, result_hash = ? WHERE id = ?",
+                (status, protocol, endpoint, card_digest, card_signature, signer_kid, int(key_changed),
+                 response_json, latency_ms, seal, row_id),
+            )
+
+    def count_outbound_since(self, since_iso: str, host: str | None = None) -> int:
+        sql = "SELECT COUNT(*) FROM outbound_calls WHERE ts >= ? AND status != 'denied'"
+        args: list = [since_iso]
+        if host:
+            sql += " AND target_host = ?"
+            args.append(host)
+        with self._lock:
+            return self._db.execute(sql, args).fetchone()[0]
+
+    def recent_outbound(self, limit: int = 25) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM outbound_calls ORDER BY id DESC LIMIT ?",
+                                    (max(1, min(int(limit), 200)),)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["request"] = json.loads(d.pop("request_json") or "{}")
+            # Replies came from other people's agents: data, never instructions.
+            d["untrusted_response"] = json.loads(d.pop("response_json") or "null")
+            d["key_changed"] = bool(d["key_changed"])
+            for k in ("prev_hash", "row_hash", "result_hash"):
+                d.pop(k)
+            out.append(d)
+        return out
+
+    def verify_outbound_chain(self) -> bool:
+        """True if no outbound row was edited, removed, or reordered after it was written."""
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM outbound_calls ORDER BY id").fetchall()
+        prev = GENESIS_HASH
+        for r in rows:
+            if r["prev_hash"] != prev or r["row_hash"] != self._chain(prev, dict(r)):
+                return False
+            if r["result_hash"]:
+                seal = hashlib.sha256(f"{r['row_hash']}\n{r['status']}\n{r['response_json']}".encode()).hexdigest()
+                if seal != r["result_hash"]:
+                    return False
+            prev = r["row_hash"]
+        return True
+
+    def pin_agent_key(self, host: str, kid: str) -> bool:
+        """Remember which key signs a host's card. Returns True if it differs from last time."""
+        now = _now()
+        with self._lock:
+            row = self._db.execute("SELECT signer_kid FROM agent_keys WHERE target_host = ?", (host,)).fetchone()
+            if row is None:
+                self._db.execute("INSERT INTO agent_keys VALUES (?, ?, ?, ?)", (host, kid, now, now))
+                return False
+            self._db.execute("UPDATE agent_keys SET signer_kid = ?, last_seen = ? WHERE target_host = ?",
+                             (kid, now, host))
+            return row["signer_kid"] != kid
 
     def recent_audit(self, limit: int = 50, tier: str | None = None) -> list[dict]:
         sql = "SELECT * FROM audit"

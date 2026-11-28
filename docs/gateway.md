@@ -137,12 +137,58 @@ and set `GATEWAY_OWNER_SECRET`, `CORTEX_USER_NAME`, and `GATEWAY_PROFILE`
 (the profile markdown inline). Do **not** give it `QDRANT_*` or
 `OPENAI_API_KEY`.
 
+## Discovery and outbound
+
+The gateway has a public identity and can ask other agents questions on your
+behalf. Both are off until you set a key.
+
+**Discovery.** Three unauthenticated routes:
+
+| Route | What |
+| --- | --- |
+| `/.well-known/agent-card.json` | A2A Agent Card: name, skills, and the MCP endpoint. JWS-signed when a key is set. |
+| `/.well-known/jwks.json` | The public key that signs the card (`jku` in the signature header). |
+| `/.well-known/http-message-signatures-directory` | The same key as a Web Bot Auth key directory. |
+
+The card lists the MCP endpoint under `supportedInterfaces` with
+`protocolBinding: "MCP"`. That binding is our convention, not part of A2A, so
+A2A clients that don't know it skip it. A native A2A door is phase 2.
+
+**Identity.** One Ed25519 key (`GATEWAY_SIGNING_KEY`, made with
+`python identity.py keygen`) signs the card and every outbound request.
+Outbound requests carry RFC 9421 HTTP Message Signatures in the Web Bot Auth
+shape: `Signature-Agent: sig1="<GATEWAY_PUBLIC_URL>"`, covering `@method`,
+`@authority`, `@path` and `signature-agent`, with a 5-minute expiry, a nonce,
+and `tag="web-bot-auth"`. A valid signature proves the request came from the
+holder of the key published at that origin, nothing more.
+
+**ask_agent** (owner tier). Asks one question of another agent and returns
+the reply under `untrusted`. Targets: a domain or URL with an Agent Card (A2A
+v1.0 `SendMessage` or v0.3 `message/send`, JSON-RPC), or an MCP endpoint
+ending in `/mcp`. On MCP it may call only read-only tools: a fixed list
+(`ask_about_owner`, `ask_question`, ...) plus any tool the server marks
+`readOnlyHint`. `leave_message`, `request_meeting` and other tools that carry
+your words somewhere are always refused. It never follows redirects and
+refuses hosts that resolve to private addresses.
+
+**Policy.** `outbound_policy.example.yaml`, loaded from
+`GATEWAY_OUTBOUND_POLICY` or `GATEWAY_OUTBOUND_POLICY_PATH`, enforced in
+code: a kill switch, a mode per tool (`"off"`, `ask_me`, `auto`), a host
+allowlist and denylist, hourly and per-target daily caps, and a question
+length cap. No policy means outbound is off.
+
+**Log.** Every outbound call is written to `outbound_calls` before it is
+sent; if that write fails, nothing goes out. Rows are hash-chained, so an
+edited, reordered or deleted row (other than the newest) shows up as
+`chain_intact: false` in `outbound_activity`. Each target's card signing key
+is pinned on first contact, and a changed key is flagged as `key_changed`.
+
 ## Connect
 
 - Visitors: `https://<gateway-host>/mcp`. Add `?client=<name>` so the audit
   log can tell apps apart (e.g. `/mcp?client=duet`).
 - You: add `https://<gateway-host>/<GATEWAY_OWNER_SECRET>/mcp` as a connector
-  and ask "what's in my gateway queue?"
+  and ask "what's in my gateway queue?" or "ask agentbin's echo agent hello".
 
 ## Tests
 
@@ -155,3 +201,5 @@ cd services/gateway && pip install -r requirements.txt pytest && python -m pytes
 Phase 2 adds OAuth grants and a per-project collaborator tier, so a
 coworker's agent can read context you publish for one shared project.
 Phase 3 adds A2A tasks for long-running work that waits on your approval.
+Outbound next: verify signatures on inbound calls (a visitor shows as a
+verified agent of its domain), a native A2A endpoint, then `propose_meeting`.

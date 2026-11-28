@@ -74,3 +74,6 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
   boundary (two-zone capture). Never widen them without being asked.
 - The `gateway` service must never get `QDRANT_*` or `OPENAI_API_KEY`. Its
   public tier is safe only because it cannot reach the corpus (docs/gateway.md).
+- `GATEWAY_SIGNING_KEY` is the gateway's identity: anyone holding it can sign
+  as the owner's agent. Keep it in the service's variables only. Outbound tools
+  ship `"off"`; switch one on only when the owner asks, one tool at a time.
