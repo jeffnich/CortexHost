@@ -23,7 +23,7 @@ from public_profile import Profile  # noqa: E402
 from availability import FreeBusy  # noqa: E402
 from server import TOOL_PERMISSIONS, Config, Gateway  # noqa: E402
 
-SECRET = "owner-secret-for-tests-0123456789"
+SECRET = "owner-secret-for-tests-0123456789"  # gitleaks:allow (test fixture)
 PROFILE = (Path(__file__).resolve().parents[1] / "profile.example.md").read_text()
 
 
@@ -244,8 +244,8 @@ def test_http_round_trip_as_duet(live_gateway):
 
 
 def test_owner_name_does_not_dominate_ranking():
-    p = Profile("## Start here\nJeff's gateway.\n\n## Queue for Jeff\nJeff reviews it.\n\n## Who Jeff is\nA product leader.")
-    assert p.answer("who is jeff")[0]["title"] == "Who Jeff is"
+    p = Profile("## Start here\nAda's gateway.\n\n## Queue for Ada\nAda reviews it.\n\n## Who Ada is\nA product leader.")
+    assert p.answer("who is ada")[0]["title"] == "Who Ada is"
 
 
 # ---- get_owner_take -----------------------------------------------------------

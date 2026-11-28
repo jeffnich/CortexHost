@@ -65,13 +65,13 @@ either. Avoid the "secret address", which carries full event details.
 
 ## Triage: an agent reads first
 
-The gateway is agent-to-agent, so Jeff should not see every request. A third
-tier, the triage tier at `/<GATEWAY_TRIAGE_SECRET>/mcp`, lets his own triage
+The gateway is agent-to-agent, so you should not see every request. A third
+tier, the triage tier at `/<GATEWAY_TRIAGE_SECRET>/mcp`, lets your own triage
 agent list new requests and record a verdict (`escalate`, `digest`,
 `suggest_decline`, `noise`), a one-line summary and a draft reply. It has no
 tool to resolve, reply, or reach memory: the agent reads strangers' text, so it
-gets nothing that acts on it. Jeff sees the triage on `list_requests` and sends
-a draft with `resolve_request` when he says go.
+gets nothing that acts on it. You see the triage on `list_requests` and send
+a draft with `resolve_request` when you say go.
 
 The triage agent's standing prompt is `services/gateway/triage_agent.md`. It
 runs as a scheduled Claude task twice a day (a digest with push notification

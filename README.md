@@ -1,16 +1,15 @@
-# CortexHost
+# Cortex Kit
 
 A self-hosted second brain: every surface you think on feeds one private
 memory substrate, and everything downstream — recall inside your AI chats, a
-daily brief, behavioral foresight, a galaxy map of your mind — reads from it.
+daily brief, behavioral foresight, an agent gateway for other people's
+agents — reads from it.
 
 Context compounds. Chats forget, notes fragment, and the connective tissue of
 your thinking dies in the gaps. Cortex captures the durable layer (decisions,
 frameworks, facts, preferences, lessons) from every source, condenses it into
 one-sentence "sparks," embeds them into a vector store you own, and serves
 them back through MCP to whatever AI you already use.
-
-![The demo view of a real Cortex: 17,478 memories, 16 sources, 50 topics](docs/assets/demo-map.png)
 
 ```
  capture            condense              store            reflect
@@ -20,7 +19,7 @@ them back through MCP to whatever AI you already use.
  sessions        ├─► "sparks" with   ──► vectors +  ───┤   Claude / any client
  Obsidian      ──┤   dedupe keys         payloads      ├─ daily brief + email
  anything      ──┘   (two-zone           (yours)       ├─ foresight forecasts
-                      privacy filter)                  └─ galaxy map + demo
+                      privacy filter)                  └─ agent gateway (public)
 ```
 
 ## What you get
@@ -36,14 +35,6 @@ them back through MCP to whatever AI you already use.
 - **Foresight** — weekly, it scores its own prior forecasts against reality,
   then forecasts which of your threads are at risk of going dark, with
   calibrated probabilities and one highest-leverage action.
-- **Galaxy map** — every memory as a point in a pan/zoom constellation
-  (UMAP + KMeans topics), colored by source or topic, with a live feed.
-  Includes a **shareable demo**: an LLM classifies each memory
-  personal-vs-public, grays and strips the personal ones, and serves the
-  redacted view on its own secret URL with a styled password gate to the
-  full map.
-
-  <img src="docs/assets/login.png" width="420" alt="The passphrase gate between the shareable demo and the full map">
 - **Agent gateway** — a public MCP endpoint other people's agents can talk
   to. Visitors can ask about you (answered only from a public profile you
   write) and leave meeting requests or messages in a queue you approve.
@@ -78,8 +69,8 @@ Then:
 - MCP endpoint: `http://localhost:8300/<CORTEX_MCP_PATH_SECRET>/mcp`
   (streamable HTTP — add it to Claude as a custom connector / MCP server)
 - Brief: `http://localhost:8301/<BRIEF_PATH_SECRET>/brief.html`
-- Map: `http://localhost:8302/<MAP_PATH_SECRET>/map.html`
-- Shareable demo: `http://localhost:8302/<DEMO_PATH_SECRET>/demo.html`
+- Gateway (public): `http://localhost:8303/mcp`; owner console at
+  `http://localhost:8303/<GATEWAY_OWNER_SECRET>/mcp`
 
 Import your history (this is what makes it feel alive on day one):
 
@@ -105,15 +96,11 @@ See [docs/capture-setup.md](docs/capture-setup.md) for ongoing auto-capture
   employer-proprietary content at ingest time, and `CORTEX_EXCLUDE` lets you
   extend the exclusion list. Work content stays siloed; only the personal
   layer crosses.
-- **Capability URLs.** Every service hides behind an unguessable path secret.
-  The demo map lives on its own secret so sharing it never exposes the full
-  map's URL, and the full map can additionally be password-gated.
+- **Capability URLs.** Every private service hides behind an unguessable path
+  secret.
 - **The agent gateway can't see your memory.** It runs with no Qdrant or
   OpenAI credentials, so visitors' agents only ever reach the profile you
   wrote and a request queue.
-- **Raw text never leaves the substrate un-redacted.** The shareable demo
-  strips personal memory text from the page entirely (server-side), not
-  hidden client-side.
 
 ## Architecture notes
 
@@ -121,8 +108,7 @@ See [docs/capture-setup.md](docs/capture-setup.md) for ongoing auto-capture
   (`text-embedding-3-small`). Every memory: text, source, tags, timestamps,
   scoped `tenant:user` id, content-hash dedupe key (idempotent re-runs), and
   a 0.97-cosine near-duplicate guard.
-- Services are dependency-light Python (stdlib HTTP; no frameworks). The map
-  regenerates in a child process so the always-on server stays ~40MB.
+- Services are dependency-light Python (stdlib HTTP; no frameworks).
 - Runs anywhere Docker runs. On Railway (what the original deployment uses),
   point the services at a private-network Qdrant and keep the same env vars.
 
@@ -156,6 +142,10 @@ private lineage also captures iMessage (via a macOS Full-Disk-Access
 snapshot trick), Apple Calendar patterns, and Oura biometrics — those rails
 are macOS-specific and not in this cut yet. PRs welcome; this is shared as a
 working reference system, not a supported product.
+
+`services/map` (the old galaxy map) is legacy: still in the tree, not wired
+into Compose. Owner-side trust views (activity feed, memory access ledger)
+replace it on the roadmap.
 
 ## License
 
