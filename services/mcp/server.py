@@ -12,16 +12,23 @@ Env (Railway service variables):
   OPENAI_API_KEY           embeddings (text-embedding-3-small, locked to corpus)
   CORTEX_MCP_PATH_SECRET   capability URL path segment
   CORTEX_TENANT_ID / CORTEX_USER_ID   identity scope
+
+Client attribution: every write is stamped server-side with `client` (which
+app made the call) alongside the model-supplied `source`. The label comes from,
+in order: a `?client=<name>` query param on the connector URL, an
+`X-Cortex-Client` header, then the MCP clientInfo / User-Agent the client sent.
+Give each app its own URL (e.g. .../mcp?client=cursor) to make the tag reliable.
 """
 
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import requests
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from openai import OpenAI
 
@@ -45,6 +52,77 @@ _security = TransportSecuritySettings(
     allowed_origins=["*"],
 )
 mcp = FastMCP("cortex", transport_security=_security)
+
+
+# ----------------------------------------------------------------------------
+# Client attribution
+# ----------------------------------------------------------------------------
+
+# Substring of clientInfo.name or User-Agent (lowercased) -> canonical label.
+# First match wins, so more specific patterns go first.
+_CLIENT_PATTERNS = (
+    ("claude-desktop", "claude-desktop"),  # Claude Code inside the desktop app
+    ("claude-code", "claude-code"),
+    ("claude-user", "claude-ai"),  # claude.ai connector proxy (every claude.ai surface)
+    ("claude-ai", "claude-ai"),
+    ("openai", "chatgpt"),
+    ("chatgpt", "chatgpt"),
+    ("codex", "codex"),
+    ("cursor", "cursor"),
+)
+_LABEL_RE = re.compile(r"[^a-z0-9._-]+")
+
+
+def _clean_label(value: str | None) -> str | None:
+    label = _LABEL_RE.sub("-", (value or "").strip().lower()).strip("-")[:40]
+    return label or None
+
+
+def _caller(ctx: Context | None) -> dict:
+    """Best-effort identity of the app on the other end of this MCP session.
+
+    Never raises: attribution must not be able to break a write.
+    """
+    info: dict = {}
+    if ctx is None:
+        return {"client": "unknown"}
+    try:
+        params = ctx.session.client_params
+        if params and params.clientInfo:
+            info["client_name"] = params.clientInfo.name
+            info["client_version"] = params.clientInfo.version
+    except Exception:
+        pass
+    try:
+        req = ctx.request_context.request
+        if req is not None:
+            info["label"] = _clean_label(req.query_params.get("client")) or _clean_label(
+                req.headers.get("x-cortex-client")
+            )
+            info["user_agent"] = (req.headers.get("user-agent") or "")[:200] or None
+    except Exception:
+        pass
+
+    client = info.get("label")
+    if not client and "claude-user" in (info.get("user_agent") or "").lower():
+        # Arrived through the claude.ai connector proxy. clientInfo still says
+        # which Claude surface: "claude-ai" for chat, "claude-code" for cloud
+        # agent sessions (claude.ai/code, projects), which would otherwise be
+        # confused with Claude Code running locally.
+        name = (info.get("client_name") or "").lower()
+        client = "claude-code-cloud" if "claude-code" in name else "claude-ai"
+    if not client:
+        haystack = f"{info.get('client_name') or ''} {info.get('user_agent') or ''}".lower()
+        client = next((lbl for pat, lbl in _CLIENT_PATTERNS if pat in haystack), None)
+    if not client:
+        client = _clean_label(info.get("client_name")) or "unknown"
+    info["client"] = client
+    return {k: v for k, v in info.items() if v}
+
+
+def _log_write(tool: str, caller: dict, memory_id: str) -> None:
+    # One line per write so Railway logs show what each app actually sends.
+    print(f"cortex-write tool={tool} id={memory_id} caller={json.dumps(caller)}", file=sys.stderr, flush=True)
 
 
 def _embed(text: str) -> list[float]:
@@ -92,6 +170,7 @@ def _fmt(hit: dict) -> dict:
         "text": p.get("text", ""),
         "timestamp": p.get("created_at") or p.get("timestamp"),
         "source": p.get("source"),
+        "client": p.get("client"),
         "tags": p.get("tags") or [],
     }
 
@@ -131,6 +210,7 @@ def store_memory(
     source: str = "mcp",
     when: str | None = None,
     dedupe_key: str | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Store a durable fact, decision, framework, or commitment in the user's memory corpus.
 
@@ -138,6 +218,8 @@ def store_memory(
     (cosine >= 0.97 against an existing memory) are skipped automatically.
     `when` optionally back-dates the memory (ISO date/datetime, e.g. '2026-01-15')
     for imported or sensor data so it carries its real date, not capture time.
+    `source` is your own label for where this came from; the server separately
+    records which app made the call, so you don't need to guess it.
     `dedupe_key` gives the memory a deterministic id (re-storing the same key
     overwrites in place) and skips similarity dedup — use for keyed/templated
     records like one-per-day sensor data, e.g. 'oura:2026-05-04'.
@@ -145,6 +227,7 @@ def store_memory(
     text = (text or "").strip()
     if not text:
         return json.dumps({"stored": False, "reason": "empty text"})
+    caller = _caller(ctx)
     vec = _embed(text)
     if dedupe_key:
         mid = str(uuid.uuid5(uuid.NAMESPACE_URL, "cortex:" + dedupe_key))
@@ -174,30 +257,39 @@ def store_memory(
         "updated_at": now.isoformat(),
         "updated_at_ts": now.timestamp(),
         "source": source,
+        "client": caller["client"],
         "tags": tags or [],
         "type_hint": type,
-        "metadata": {"channel": "cortex-mcp-cloud"},
+        "metadata": {"channel": "cortex-mcp-cloud", "caller": caller},
     }
     _q(
         "PUT",
         f"/collections/{COLLECTION}/points?wait=true",
         {"points": [{"id": mid, "vector": vec, "payload": payload}]},
     )
-    return json.dumps({"stored": True, "memory_id": mid})
+    _log_write("store_memory", caller, mid)
+    return json.dumps({"stored": True, "memory_id": mid, "client": caller["client"]})
 
 
 @mcp.tool()
-def recent_memories(days: int = 7, limit: int = 20, source: str | None = None) -> str:
+def recent_memories(
+    days: int = 7, limit: int = 20, source: str | None = None, client: str | None = None
+) -> str:
     """List the user's memories from the last N days, newest first.
 
     Optional source filter, e.g. 'chatgpt' (imported history), 'claude-code',
     'obsidian', 'mcp' (stored via this server).
+    Optional client filter: the app that wrote it, e.g. 'claude-ai', 'cursor',
+    'chatgpt', 'codex', 'claude-code' (only set on memories written after
+    client tagging shipped).
     """
     since = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).timestamp()
     flt = _identity_filter()
     flt["must"].append({"key": "created_at_ts", "range": {"gte": since}})
     if source:
         flt["must"].append({"key": "source", "match": {"value": source}})
+    if client:
+        flt["must"].append({"key": "client", "match": {"value": client}})
     res = _q(
         "POST",
         f"/collections/{COLLECTION}/points/scroll",
@@ -247,6 +339,15 @@ def memory_stats() -> str:
                 pass
     out["by_source"] = dict(sorted(by_source.items(), key=lambda kv: -kv[1]))
     out["scoped_total"] = sum(by_source.values())
+    try:
+        res = _q(
+            "POST",
+            f"/collections/{COLLECTION}/facet",
+            {"key": "client", "filter": ident, "limit": 50, "exact": True},
+        )
+        out["by_client"] = {h["value"]: h["count"] for h in res["result"]["hits"]}
+    except Exception:
+        out["by_client"] = None  # needs the `client` payload index
     return json.dumps(out)
 
 
@@ -281,7 +382,9 @@ def _parse_due(due: str | None):
     return s, None  # keep raw string if unparseable
 
 
-def _os_create(kind: str, text: str, due: str | None = None, to_whom: str | None = None) -> str:
+def _os_create(
+    kind: str, text: str, due: str | None = None, to_whom: str | None = None, caller: dict | None = None
+) -> str:
     text = (text or "").strip()
     if not text:
         return json.dumps({"created": False, "reason": "empty text"})
@@ -300,6 +403,7 @@ def _os_create(kind: str, text: str, due: str | None = None, to_whom: str | None
         "updated_at": now.isoformat(),
         "updated_at_ts": now.timestamp(),
         "source": "cortex-os",
+        "client": (caller or {}).get("client", "unknown"),
         "os_kind": kind,
         "os_status": "open",
         "os_due": due_iso,
@@ -308,13 +412,14 @@ def _os_create(kind: str, text: str, due: str | None = None, to_whom: str | None
         "os_done_at": None,
         "tags": ["cortex-os", kind],
         "type_hint": f"os_{kind}",
-        "metadata": {"channel": "cortex-os"},
+        "metadata": {"channel": "cortex-os", "caller": caller or {}},
     }
     _q(
         "PUT",
         f"/collections/{COLLECTION}/points?wait=true",
         {"points": [{"id": mid, "vector": _embed(text), "payload": payload}]},
     )
+    _log_write(f"add_{kind}", caller or {}, mid)
     return json.dumps({"created": True, "id": mid, "kind": kind, "due": due_iso})
 
 
@@ -350,32 +455,39 @@ def _os_list(kind: str | None, status: str = "open", limit: int = 50) -> list[di
 
 
 @mcp.tool()
-def add_todo(text: str, due: str | None = None) -> str:
+def add_todo(text: str, due: str | None = None, ctx: Context | None = None) -> str:
     """Add a to-do to the user's task list. `due` is an optional date/time (ISO 8601,
     e.g. '2026-06-15' or '2026-06-15T14:00'); convert natural language like
     'tomorrow' or 'Friday' to an ISO date before calling.
     """
-    return _os_create("todo", text, due=due)
+    return _os_create("todo", text, due=due, caller=_caller(ctx))
 
 
 @mcp.tool()
-def add_commitment(text: str, to_whom: str | None = None, due: str | None = None) -> str:
+def add_commitment(
+    text: str, to_whom: str | None = None, due: str | None = None, ctx: Context | None = None
+) -> str:
     """Record a commitment the user made (something they promised to do or deliver).
     Optionally capture who it's to (`to_whom`) and a due date (`due`, ISO 8601).
     Use this when the user says they'll do something for someone or by some time.
     """
-    return _os_create("commitment", text, due=due, to_whom=to_whom)
+    return _os_create("commitment", text, due=due, to_whom=to_whom, caller=_caller(ctx))
 
 
 @mcp.tool()
-def complete_item(item_id: str) -> str:
+def complete_item(item_id: str, ctx: Context | None = None) -> str:
     """Mark a to-do or commitment done by its id (ids come from whats_open / daily_brief)."""
     now = datetime.now(timezone.utc)
     _q(
         "POST",
         f"/collections/{COLLECTION}/points/payload?wait=true",
         {
-            "payload": {"os_status": "done", "os_done_at": now.isoformat(), "updated_at_ts": now.timestamp()},
+            "payload": {
+                "os_status": "done",
+                "os_done_at": now.isoformat(),
+                "os_done_by": _caller(ctx)["client"],
+                "updated_at_ts": now.timestamp(),
+            },
             "points": [item_id],
         },
     )
@@ -452,7 +564,8 @@ def _ensure_collection():
                              headers={"api-key": QDRANT_KEY}, timeout=20).raise_for_status()
                 for field, schema in (("user_id", "keyword"), ("source", "keyword"),
                                       ("tags", "keyword"), ("os_status", "keyword"),
-                                      ("os_kind", "keyword"), ("created_at_ts", "float")):
+                                      ("os_kind", "keyword"), ("client", "keyword"),
+                                      ("created_at_ts", "float")):
                     try:
                         requests.put(f"{QDRANT_URL}/collections/{COLLECTION}/index?wait=true",
                                      json={"field_name": field, "field_schema": schema},
@@ -468,12 +581,25 @@ def _ensure_collection():
     print("warning: qdrant unreachable at boot; collection not ensured", file=sys.stderr)
 
 
+def _ensure_client_index() -> None:
+    """Keyword index on `client` so filtering/faceting by app is fast. Idempotent."""
+    try:
+        _q(
+            "PUT",
+            f"/collections/{COLLECTION}/index?wait=false",
+            {"field_name": "client", "field_schema": "keyword"},
+        )
+    except Exception as exc:  # never block startup on this
+        print(f"client index not ensured: {exc}", file=sys.stderr)
+
+
 if __name__ == "__main__":
     secret = os.environ.get("CORTEX_MCP_PATH_SECRET", "").strip()
     if not secret or len(secret) < 24:
         print("CORTEX_MCP_PATH_SECRET missing or too short", file=sys.stderr)
         sys.exit(1)
     _ensure_collection()
+    _ensure_client_index()  # existing installs predate the `client` field
     # Railway's edge and private network are IPv6; bind dual-stack wildcard.
     mcp.settings.host = os.environ.get("MCP_BIND_HOST", "::")
     mcp.settings.port = int(os.environ.get("PORT", "8080"))

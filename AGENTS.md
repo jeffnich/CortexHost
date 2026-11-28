@@ -30,6 +30,12 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
      `{"mcpServers": {"cortex": {"url": "http://localhost:8300/<secret>/mcp"}}}`
    - **claude.ai / Claude Desktop**: needs a public URL (deploy first, or
      tunnel); local-only installs should use Claude Code or Cursor.
+   - **One URL per app.** Append `?client=<name>` (e.g. `...mcp?client=cursor`)
+     so every write is stamped with the app that made it (`client` field,
+     filterable in `recent_memories`, counted in `memory_stats`). Without it
+     the server falls back to MCP clientInfo / User-Agent: claude.ai chat
+     reads as `claude-ai`, claude.ai cloud agents as `claude-code-cloud`, but
+     different apps riding the same connector look identical.
    Then test: call `memory_stats` / `search_memory` through the client.
 5. **Import history** (the payoff step):
    - `pip install -r capture/requirements.txt`
