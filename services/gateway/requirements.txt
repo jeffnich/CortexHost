@@ -2,3 +2,6 @@ mcp>=1.9,<2  # 2.x renamed FastMCP -> MCPServer; unpinned builds break
 uvicorn>=0.30
 icalendar>=6
 recurring-ical-events>=3
+httpx>=0.27          # outbound calls (already pulled in by mcp; pinned here because we import it)
+cryptography>=42     # Ed25519 signing key
+PyYAML>=6            # outbound policy file

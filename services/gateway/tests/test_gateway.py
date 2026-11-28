@@ -49,12 +49,14 @@ def test_public_tier_exposes_only_public_tools(tmp_path):
     gw = make_gateway(tmp_path)
     assert tool_names(gw.public) == {"ask_about_owner", "get_owner_take", "check_availability",
                                      "request_meeting", "leave_message", "check_request"}
-    assert tool_names(gw.owner) == {"list_requests", "resolve_request", "gateway_activity", "preview_public_profile"}
+    assert tool_names(gw.owner) == {"list_requests", "resolve_request", "gateway_activity", "preview_public_profile",
+                                    "ask_agent", "outbound_activity"}
 
 
 def test_gateway_module_has_no_corpus_access():
     src = "".join((Path(__file__).resolve().parents[1] / f).read_text()
-                  for f in ("server.py", "store.py", "guard.py", "public_profile.py", "availability.py"))
+                  for f in ("server.py", "store.py", "guard.py", "public_profile.py", "availability.py",
+                            "identity.py", "outbound.py"))
     for forbidden in ("QDRANT_URL", "QDRANT_API_KEY", "OPENAI_API_KEY", "import requests",
                       "from openai", "search_memory("):
         assert forbidden not in src, forbidden

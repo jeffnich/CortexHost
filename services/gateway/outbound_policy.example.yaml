@@ -1,0 +1,28 @@
+# Outbound policy: what the owner's agent may do to OTHER agents without asking.
+# Enforced in code (outbound.py), not in a prompt. Load it with
+# GATEWAY_OUTBOUND_POLICY (inline YAML) or GATEWAY_OUTBOUND_POLICY_PATH.
+# With no policy at all, every outbound tool is off.
+
+kill_switch: false          # true stops all outbound calls at once
+
+tools:
+  ask_agent: "off"          # "off" | ask_me | auto (quote "off": bare off is YAML false). ask_me = owner must confirm each call.
+
+targets:                    # hostnames; * wildcards allowed. deny wins over allow.
+  allow: []
+  # allow:
+  #   - friend-agent.example
+  #   - "*.example.org"
+  deny: []
+
+limits:
+  calls_per_hour: 20
+  calls_per_target_per_day: 10
+
+disclosure:
+  max_question_chars: 1000  # outbound questions should carry only what the public profile says
+
+# MCP tools ask_agent may call on remote servers (plus any the server marks readOnlyHint).
+# Tools that file requests (leave_message, request_meeting) are always refused.
+# mcp_read_tools: [ask_about_owner, get_owner_take, check_availability, ask_question,
+#                  read_wiki_structure, read_wiki_contents]
