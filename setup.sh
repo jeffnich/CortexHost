@@ -24,9 +24,13 @@ PY
 }
 
 echo "filling blank secrets..."
-for k in QDRANT_API_KEY CORTEX_MCP_PATH_SECRET BRIEF_PATH_SECRET MAP_PATH_SECRET DEMO_PATH_SECRET; do
+for k in QDRANT_API_KEY CORTEX_MCP_PATH_SECRET BRIEF_PATH_SECRET GATEWAY_OWNER_SECRET; do
   fill "$k" "$(gen)"
 done
+
+# The gateway's public profile is yours to write; start from the example.
+# (Created before compose runs so Docker mounts a file, not an empty dir.)
+[ -f gateway-profile.md ] || cp services/gateway/profile.example.md gateway-profile.md
 
 if grep -qE "^OPENAI_API_KEY=$" .env; then
   if [ -t 0 ]; then
@@ -43,7 +47,6 @@ docker compose up -d --build
 
 SECRET=$(grep '^CORTEX_MCP_PATH_SECRET=' .env | cut -d= -f2)
 MPORT=$(grep '^MCP_PORT=' .env | cut -d= -f2); MPORT=${MPORT:-8300}
-MAPPORT=$(grep '^MAP_PORT=' .env | cut -d= -f2); MAPPORT=${MAPPORT:-8302}
 printf "waiting for the MCP server"
 for i in $(seq 1 45); do
   code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://localhost:$MPORT/$SECRET/mcp" 2>/dev/null)
@@ -68,6 +71,4 @@ Then import your history (makes it feel alive on day one):
   2. pip install -r capture/requirements.txt
   3. python3 capture/distill_chatgpt_export.py --execute
 
-The map at http://localhost:$MAPPORT/<MAP_PATH_SECRET>/map.html shows "warming up"
-until memories exist and the first projection runs (a few minutes after import).
 EOF

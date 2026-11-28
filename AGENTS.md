@@ -2,14 +2,14 @@
 
 You (Claude Code, Cursor, or any coding agent) are installing **Cortex**, a
 self-hosted second brain: Qdrant + three small Python services (MCP memory
-server, daily brief, galaxy map), plus local capture scripts. Everything runs
+server, daily brief, agent gateway), plus local capture scripts. Everything runs
 from docker compose. The human you're helping wants a working brain, not a
 tour — execute, verify, and only ask when a step genuinely needs their input.
 
 ## Definition of done
 
-1. `docker compose ps` shows qdrant, mcp, brief, map running.
-2. `./verify.sh` prints no FAIL (WARN on brief/map is fine pre-data).
+1. `docker compose ps` shows qdrant, mcp, brief, gateway running.
+2. `./verify.sh` prints no FAIL (WARN on brief is fine pre-data).
 3. The user's AI client is connected to the MCP endpoint and a
    `search_memory` call answers (empty results are fine on a fresh corpus).
 4. Ideally: their ChatGPT export is imported and `memory_stats` shows counts.
@@ -30,6 +30,12 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
      `{"mcpServers": {"cortex": {"url": "http://localhost:8300/<secret>/mcp"}}}`
    - **claude.ai / Claude Desktop**: needs a public URL (deploy first, or
      tunnel); local-only installs should use Claude Code or Cursor.
+   - **One URL per app.** Append `?client=<name>` (e.g. `...mcp?client=cursor`)
+     so every write is stamped with the app that made it (`client` field,
+     filterable in `recent_memories`, counted in `memory_stats`). Without it
+     the server falls back to MCP clientInfo / User-Agent: claude.ai chat
+     reads as `claude-ai`, claude.ai cloud agents as `claude-code-cloud`, but
+     different apps riding the same connector look identical.
    Then test: call `memory_stats` / `search_memory` through the client.
 5. **Import history** (the payoff step):
    - `pip install -r capture/requirements.txt`
@@ -51,10 +57,9 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
 
 | Symptom | Cause / fix |
 |---|---|
-| `docker compose` port conflict on 6333/8300-8302 | Set `QDRANT_PORT` / `MCP_PORT` / `BRIEF_PORT` / `MAP_PORT` in `.env` to free ports and re-run `./setup.sh`. |
+| `docker compose` port conflict on 6333/8300-8303 | Set `QDRANT_PORT` / `MCP_PORT` / `BRIEF_PORT` / `GATEWAY_PORT` in `.env` to free ports and re-run `./setup.sh`. |
 | `ensurepip` fails creating a venv | Python 3.14 quirk on some Macs; use `python3.12 -m venv`. |
-| brief/map return 503 | Normal while warming (brief ~1 min; map needs data + first UMAP). Re-check after import. |
-| map stays "warming" forever with data present | Check `docker compose logs map` for `regen error`; usually a bad `OPENAI_API_KEY` (cluster labeling) or empty corpus. |
+| brief returns 503 | Normal while warming (~1 min). Re-check after import. |
 | capture scripts: `CORTEX_MCP_URL` errors | Set it in `.env` to `http://localhost:8300/<CORTEX_MCP_PATH_SECRET>/mcp`. |
 | embeddings errors everywhere | Invalid/missing `OPENAI_API_KEY`, or no billing on the OpenAI account. |
 | qdrant crash-loops: `Failed to load local shard` for a collection you never made | A pre-existing Docker volume from an older project shares the compose project name. Set `COMPOSE_PROJECT_NAME=<something-unique>` in `.env` and re-run `./setup.sh`. |
@@ -67,4 +72,5 @@ tour — execute, verify, and only ask when a step genuinely needs their input.
   public, don't shorten the secrets, don't disable them.
 - `CORTEX_EXCLUDE` and `OBSIDIAN_INCLUDE` implement the user's privacy
   boundary (two-zone capture). Never widen them without being asked.
-- `MAP_PASSWORD` gates the full map; leave the demo/full split intact.
+- The `gateway` service must never get `QDRANT_*` or `OPENAI_API_KEY`. Its
+  public tier is safe only because it cannot reach the corpus (docs/gateway.md).

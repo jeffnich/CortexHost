@@ -1,6 +1,6 @@
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.20.2  # pinned; bump deliberately
     restart: unless-stopped
     environment:
       - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
@@ -52,27 +52,35 @@ services:
     ports:
       - "${BIND_HOST:-127.0.0.1}:${BRIEF_PORT:-8301}:8080"
 
-  map:
-    build: ./services/map
+
+  gateway:
+    build: ./services/gateway
     restart: unless-stopped
-    depends_on: [qdrant]
     environment:
       - PORT=8080
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
-      - QDRANT_COLLECTION=memories
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - CORTEX_TENANT_ID=${CORTEX_TENANT_ID}
-      - CORTEX_USER_ID=${CORTEX_USER_ID}
+      - GATEWAY_BIND_HOST=0.0.0.0
+      - GATEWAY_OWNER_SECRET=${GATEWAY_OWNER_SECRET}
       - CORTEX_USER_NAME=${CORTEX_USER_NAME}
-      - CORTEX_EXCLUDE=${CORTEX_EXCLUDE}
-      - MAP_PATH_SECRET=${MAP_PATH_SECRET}
-      - DEMO_PATH_SECRET=${DEMO_PATH_SECRET}
-      - MAP_PASSWORD=${MAP_PASSWORD}
-      - MAP_TOPICS=${MAP_TOPICS}
-      - MAP_REFRESH_HOURS=${MAP_REFRESH_HOURS}
+      - GATEWAY_PROFILE_PATH=${GATEWAY_PROFILE_PATH:-/app/profile.example.md}
+      - CORTEX_TZ=${CORTEX_TZ}
+      # Optional; blank = feature off. See docs/gateway.md.
+      - GATEWAY_TAKES=${GATEWAY_TAKES:-}
+      - GATEWAY_FREEBUSY_ICS_URL=${GATEWAY_FREEBUSY_ICS_URL:-}
+      - GATEWAY_WORK_HOURS=${GATEWAY_WORK_HOURS:-09:00-17:00}
+      - GATEWAY_WORK_DAYS=${GATEWAY_WORK_DAYS:-mon-fri}
+      - GATEWAY_TRIAGE_SECRET=${GATEWAY_TRIAGE_SECRET:-}
+      - GATEWAY_WAKE_URL=${GATEWAY_WAKE_URL:-}
+      - GATEWAY_WAKE_TOKEN=${GATEWAY_WAKE_TOKEN:-}
+      - GATEWAY_NOTIFY_EMAIL=${GATEWAY_NOTIFY_EMAIL:-}
+      - GATEWAY_RESEND_API_KEY=${GATEWAY_RESEND_API_KEY:-}
+      - GATEWAY_NTFY_URL=${GATEWAY_NTFY_URL:-}
+      - GATEWAY_PINGS_PER_HOUR=${GATEWAY_PINGS_PER_HOUR:-10}
+    volumes:
+      - gateway_data:/data
+      - ./gateway-profile.md:/app/gateway-profile.md:ro
     ports:
-      - "${BIND_HOST:-127.0.0.1}:${MAP_PORT:-8302}:8080"
+      - "${BIND_HOST:-127.0.0.1}:${GATEWAY_PORT:-8303}:8080"
 
 volumes:
   qdrant_data:
+  gateway_data:
