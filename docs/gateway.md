@@ -154,8 +154,10 @@ The card lists the MCP endpoint under `supportedInterfaces` with
 `protocolBinding: "MCP"`. That binding is our convention, not part of A2A, so
 A2A clients that don't know it skip it. A native A2A door is phase 2.
 
-**Identity.** One Ed25519 key (`GATEWAY_SIGNING_KEY`, made with
-`python identity.py keygen`) signs the card and every outbound request.
+**Identity.** One Ed25519 key signs the card and every outbound request. Set
+`GATEWAY_PUBLIC_URL` and the gateway creates the key on first boot at
+`/data/signing.key` (mode 0600, on the volume) and reuses it, so the private
+key never leaves the server. `GATEWAY_SIGNING_KEY` overrides it.
 Outbound requests carry RFC 9421 HTTP Message Signatures in the Web Bot Auth
 shape: `Signature-Agent: sig1="<GATEWAY_PUBLIC_URL>"`, covering `@method`,
 `@authority`, `@path` and `signature-agent`, with a 5-minute expiry, a nonce,

@@ -324,3 +324,19 @@ def test_outbound_log_detects_reply_edits_and_deletes(tmp_path):
                           request={}, policy_verdict="allowed")
     gw.store._db.execute("DELETE FROM outbound_calls WHERE id = 1")
     assert not gw.store.verify_outbound_chain()
+
+
+def test_key_is_created_on_the_volume_and_reused(tmp_path):
+    key_path = tmp_path / "data" / "signing.key"
+    cfg = dict(owner_secret=SECRET, owner_name="Ada", profile_markdown=PROFILE, db_path=str(tmp_path / "k.db"),
+               public_url=PUBLIC_URL, signing_key_path=str(key_path))
+    first = Gateway(Config(**cfg)).identity.kid
+    assert key_path.is_file() and (key_path.stat().st_mode & 0o777) == 0o600
+    assert Gateway(Config(**cfg)).identity.kid == first  # same key after a restart
+
+
+def test_no_public_url_means_no_key_file(tmp_path):
+    key_path = tmp_path / "signing.key"
+    cfg = Config(owner_secret=SECRET, owner_name="Ada", profile_markdown=PROFILE, db_path=str(tmp_path / "k.db"),
+                 signing_key_path=str(key_path))
+    assert Gateway(cfg).identity is None and not key_path.exists()
