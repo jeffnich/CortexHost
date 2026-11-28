@@ -71,6 +71,8 @@ Then:
 - Brief: `http://localhost:8301/<BRIEF_PATH_SECRET>/brief.html`
 - Gateway (public): `http://localhost:8303/mcp`; owner console at
   `http://localhost:8303/<GATEWAY_OWNER_SECRET>/mcp`
+- Owner dashboard: `http://localhost:8303/<GATEWAY_OWNER_SECRET>/` (inbox,
+  activity, public view, memory access log; see `docs/dashboard.md`)
 
 Import your history (this is what makes it feel alive on day one):
 
@@ -143,9 +145,8 @@ snapshot trick), Apple Calendar patterns, and Oura biometrics — those rails
 are macOS-specific and not in this cut yet. PRs welcome; this is shared as a
 working reference system, not a supported product.
 
-`services/map` (the old galaxy map) is legacy: still in the tree, not wired
-into Compose. Owner-side trust views (activity feed, memory access ledger)
-replace it on the roadmap.
+The old galaxy map service is gone. Its replacement is the owner dashboard
+(`docs/dashboard.md`): trust and audit views instead of a picture of the corpus.
 
 ## License
 

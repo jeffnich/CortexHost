@@ -18,12 +18,23 @@ app made the call) alongside the model-supplied `source`. The label comes from,
 in order: a `?client=<name>` query param on the connector URL, an
 `X-Cortex-Client` header, then the MCP clientInfo / User-Agent the client sent.
 Give each app its own URL (e.g. .../mcp?client=cursor) to make the tag reliable.
+
+Access log: every tool call, read or write, appends one hash-chained row to a
+small SQLite file (CORTEX_ACCESS_DB, default /data/access.db when /data exists,
+else ./access.db): when, which app, which tool, read or write, which memory ids.
+The owner dashboard reads it from GET /<CORTEX_MCP_PATH_SECRET>/access.json in
+the browser, so the public Gateway never sees this service's URL. Without a
+volume the log resets on redeploy. CORTEX_ACCESS_CORS_ORIGIN (default "*",
+since the secret path is the boundary) sets which page origin may read it.
 """
 
+import hashlib
 import json
 import os
 import re
+import sqlite3
 import sys
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -125,6 +136,96 @@ def _log_write(tool: str, caller: dict, memory_id: str) -> None:
     print(f"cortex-write tool={tool} id={memory_id} caller={json.dumps(caller)}", file=sys.stderr, flush=True)
 
 
+# ----------------------------------------------------------------------------
+# Access log
+# ----------------------------------------------------------------------------
+
+_ACCESS_FIELDS = ("ts", "tool", "kind", "client", "memory_ids", "detail")
+_ACCESS_GENESIS = "0" * 64
+
+
+class AccessLog:
+    """Append-only, hash-chained record of which app touched which memories."""
+
+    def __init__(self, path: str):
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._db.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
+        with self._lock:
+            self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS access (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,"
+                " tool TEXT NOT NULL, kind TEXT NOT NULL, client TEXT NOT NULL, memory_ids TEXT NOT NULL,"
+                " detail TEXT, prev_hash TEXT NOT NULL, row_hash TEXT NOT NULL)"
+            )
+
+    @staticmethod
+    def _hash(prev: str, fields: dict) -> str:
+        blob = json.dumps({k: fields[k] for k in _ACCESS_FIELDS}, sort_keys=True)
+        return hashlib.sha256(f"{prev}\n{blob}".encode()).hexdigest()
+
+    def record(self, tool: str, kind: str, client: str, memory_ids: list, detail: str | None = None) -> None:
+        fields = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "tool": tool, "kind": kind,
+            "client": client or "unknown", "memory_ids": json.dumps([str(i) for i in memory_ids][:50]),
+            "detail": (detail or "")[:200] or None,
+        }
+        with self._lock:
+            last = self._db.execute("SELECT row_hash FROM access ORDER BY id DESC LIMIT 1").fetchone()
+            prev = last["row_hash"] if last else _ACCESS_GENESIS
+            self._db.execute(
+                "INSERT INTO access (ts, tool, kind, client, memory_ids, detail, prev_hash, row_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (*[fields[k] for k in _ACCESS_FIELDS], prev, self._hash(prev, fields)),
+            )
+
+    def recent(self, limit: int = 200) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM access ORDER BY id DESC LIMIT ?",
+                                    (max(1, min(int(limit), 2000)),)).fetchall()
+        out = []
+        for r in rows:
+            d = {k: r[k] for k in ("id", *_ACCESS_FIELDS)}
+            d["memory_ids"] = json.loads(d["memory_ids"])
+            out.append(d)
+        return out
+
+    def verify(self) -> dict:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM access ORDER BY id").fetchall()
+        prev = _ACCESS_GENESIS
+        for r in rows:
+            if r["prev_hash"] != prev or r["row_hash"] != self._hash(prev, dict(r)):
+                return {"intact": False, "checked": len(rows), "broken_at": r["id"]}
+            prev = r["row_hash"]
+        return {"intact": True, "checked": len(rows)}
+
+
+def _access_path() -> str:
+    explicit = os.environ.get("CORTEX_ACCESS_DB", "").strip()
+    if explicit:
+        return explicit
+    return "/data/access.db" if os.path.isdir("/data") else "access.db"
+
+
+_access: AccessLog | None = None
+
+
+def _record_access(tool: str, kind: str, client: str, memory_ids=(), detail: str | None = None) -> None:
+    """Never lets logging break the tool call it describes."""
+    global _access
+    try:
+        if _access is None:
+            _access = AccessLog(_access_path())
+        _access.record(tool, kind, client, [i for i in memory_ids if i is not None], detail)
+    except Exception as exc:
+        print(f"access log failed tool={tool}: {exc!r}", file=sys.stderr, flush=True)
+
+
+def _log_access(tool: str, kind: str, ctx: Context | None, memory_ids=(), detail: str | None = None) -> None:
+    _record_access(tool, kind, _caller(ctx)["client"], memory_ids, detail)
+
+
 def _embed(text: str) -> list[float]:
     resp = _openai.embeddings.create(model=EMBED_MODEL, input=" ".join(text.split())[:4000])
     return resp.data[0].embedding
@@ -181,6 +282,7 @@ def search_memory(
     limit: int = 8,
     year_start: int | None = None,
     year_end: int | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """Semantic search over the user's full memory corpus (their entire history).
 
@@ -199,6 +301,7 @@ def search_memory(
             {"key": "created_at_ts", "range": {"lt": datetime(year_end + 1, 1, 1, tzinfo=timezone.utc).timestamp()}}
         )
     hits = _search(vec, max(1, min(int(limit), 50)), extra)
+    _log_access("search_memory", "read", ctx, [h.get("id") for h in hits], f"query: {query}")
     return json.dumps({"count": len(hits), "memories": [_fmt(h) for h in hits]}, default=str)
 
 
@@ -268,12 +371,14 @@ def store_memory(
         {"points": [{"id": mid, "vector": vec, "payload": payload}]},
     )
     _log_write("store_memory", caller, mid)
+    _log_access("store_memory", "write", ctx, [mid])
     return json.dumps({"stored": True, "memory_id": mid, "client": caller["client"]})
 
 
 @mcp.tool()
 def recent_memories(
-    days: int = 7, limit: int = 20, source: str | None = None, client: str | None = None
+    days: int = 7, limit: int = 20, source: str | None = None, client: str | None = None,
+    ctx: Context | None = None,
 ) -> str:
     """List the user's memories from the last N days, newest first.
 
@@ -296,6 +401,7 @@ def recent_memories(
         {"limit": max(1, min(int(limit), 100)), "with_payload": True, "filter": flt},
     )
     pts = res["result"]["points"]
+    _log_access("recent_memories", "read", ctx, [p.get("id") for p in pts], f"last {days} days")
     mems = sorted(
         (_fmt({"payload": p.get("payload") or {}}) for p in pts),
         key=lambda m: str(m["timestamp"] or ""),
@@ -305,8 +411,9 @@ def recent_memories(
 
 
 @mcp.tool()
-def memory_stats() -> str:
+def memory_stats(ctx: Context | None = None) -> str:
     """Corpus overview: total memory count and a full per-source breakdown."""
+    _log_access("memory_stats", "read", ctx, [], "counts only")
     out: dict = {"collection": COLLECTION, "scoped_user": SCOPED_USER}
     out["total_points"] = _q("GET", f"/collections/{COLLECTION}")["result"]["points_count"]
     ident = {"must": [{"key": "user_id", "match": {"value": SCOPED_USER}}]}
@@ -420,6 +527,7 @@ def _os_create(
         {"points": [{"id": mid, "vector": _embed(text), "payload": payload}]},
     )
     _log_write(f"add_{kind}", caller or {}, mid)
+    _record_access(f"add_{kind}", "write", (caller or {}).get("client", "unknown"), [mid])
     return json.dumps({"created": True, "id": mid, "kind": kind, "due": due_iso})
 
 
@@ -491,20 +599,22 @@ def complete_item(item_id: str, ctx: Context | None = None) -> str:
             "points": [item_id],
         },
     )
+    _log_access("complete_item", "write", ctx, [item_id])
     return json.dumps({"completed": True, "id": item_id})
 
 
 @mcp.tool()
-def whats_open(kind: str | None = None, limit: int = 25) -> str:
+def whats_open(kind: str | None = None, limit: int = 25, ctx: Context | None = None) -> str:
     """List the user's open to-dos and commitments, soonest-due first. Optionally
     filter by kind ('todo' or 'commitment'). Returns ids for completing items.
     """
     items = _os_list(kind, status="open", limit=limit)
+    _log_access("whats_open", "read", ctx, [i["id"] for i in items])
     return json.dumps({"count": len(items), "items": items}, default=str)
 
 
 @mcp.tool()
-def daily_brief() -> str:
+def daily_brief(ctx: Context | None = None) -> str:
     """The user's morning brief: today's date, open commitments and to-dos (soonest
     due first, overdue flagged), and how many memories were captured in the last
     day. Use this when the user asks what's on their plate, their agenda, or for a brief.
@@ -513,6 +623,7 @@ def daily_brief() -> str:
     today_ts = now_local.timestamp()
     commitments = _os_list("commitment", status="open", limit=50)
     todos = _os_list("todo", status="open", limit=50)
+    _log_access("daily_brief", "read", ctx, [i["id"] for i in commitments + todos])
 
     def mark(items):
         for i in items:
@@ -593,6 +704,28 @@ def _ensure_client_index() -> None:
         print(f"client index not ensured: {exc}", file=sys.stderr)
 
 
+def register_access_route(secret: str) -> None:
+    """GET /<secret>/access.json: the access log plus a chain check, for the owner dashboard."""
+    from starlette.responses import JSONResponse, Response
+
+    origin = os.environ.get("CORTEX_ACCESS_CORS_ORIGIN", "*").strip() or "*"
+    cors = {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET",
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Vary": "Origin"}
+
+    @mcp.custom_route(f"/{secret}/access.json", methods=["GET", "OPTIONS"])
+    async def access_json(request):
+        if request.method == "OPTIONS":
+            return Response(status_code=204, headers=cors)
+        global _access
+        if _access is None:
+            _access = AccessLog(_access_path())
+        try:
+            limit = int(request.query_params.get("limit", 300))
+        except ValueError:
+            limit = 300
+        return JSONResponse({"chain": _access.verify(), "entries": _access.recent(limit)}, headers=cors)
+
+
 if __name__ == "__main__":
     secret = os.environ.get("CORTEX_MCP_PATH_SECRET", "").strip()
     if not secret or len(secret) < 24:
@@ -604,4 +737,5 @@ if __name__ == "__main__":
     mcp.settings.host = os.environ.get("MCP_BIND_HOST", "::")
     mcp.settings.port = int(os.environ.get("PORT", "8080"))
     mcp.settings.streamable_http_path = f"/{secret}/mcp"
+    register_access_route(secret)
     mcp.run(transport="streamable-http")

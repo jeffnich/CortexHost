@@ -24,6 +24,11 @@ services:
       - CORTEX_TENANT_ID=${CORTEX_TENANT_ID}
       - CORTEX_USER_ID=${CORTEX_USER_ID}
       - CORTEX_TZ=${CORTEX_TZ}
+      # Access log for the owner dashboard; the volume keeps it across rebuilds.
+      - CORTEX_ACCESS_DB=/data/access.db
+      - CORTEX_ACCESS_CORS_ORIGIN=${CORTEX_ACCESS_CORS_ORIGIN:-*}
+    volumes:
+      - mcp_data:/data
     ports:
       - "${BIND_HOST:-127.0.0.1}:${MCP_PORT:-8300}:8080"
 
@@ -84,3 +89,4 @@ services:
 volumes:
   qdrant_data:
   gateway_data:
+  mcp_data:

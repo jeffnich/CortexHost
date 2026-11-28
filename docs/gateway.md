@@ -189,6 +189,8 @@ is pinned on first contact, and a changed key is flagged as `key_changed`.
   log can tell apps apart (e.g. `/mcp?client=duet`).
 - You: add `https://<gateway-host>/<GATEWAY_OWNER_SECRET>/mcp` as a connector
   and ask "what's in my gateway queue?" or "ask agentbin's echo agent hello".
+- You, in a browser: `https://<gateway-host>/<GATEWAY_OWNER_SECRET>/` is the
+  owner dashboard. See [dashboard.md](dashboard.md).
 
 ## Tests
 

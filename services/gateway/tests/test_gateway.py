@@ -56,7 +56,7 @@ def test_public_tier_exposes_only_public_tools(tmp_path):
 def test_gateway_module_has_no_corpus_access():
     src = "".join((Path(__file__).resolve().parents[1] / f).read_text()
                   for f in ("server.py", "store.py", "guard.py", "public_profile.py", "availability.py",
-                            "identity.py", "outbound.py"))
+                            "identity.py", "outbound.py", "dashboard.py"))
     for forbidden in ("QDRANT_URL", "QDRANT_API_KEY", "OPENAI_API_KEY", "import requests",
                       "from openai", "search_memory("):
         assert forbidden not in src, forbidden
